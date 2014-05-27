@@ -1,7 +1,4 @@
 ////////////////////////////////////////////////////////////////////////////
-//	File:		    ConfigBA.h
-//	Author:		    Changchang Wu (ccwu@cs.washington.edu)
-//	Description :   configuration object class
 //
 //  Copyright (c) 2011  Changchang Wu (ccwu@cs.washington.edu)
 //    and the University of Washington at Seattle
@@ -18,11 +15,15 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifndef CONFIG_BA_H
-#define CONFIG_BA_H
+#ifndef SFM_PBA_CONFIG_HEADER
+#define SFM_PBA_CONFIG_HEADER
 
 #include <vector>
-using std::vector;
+
+#include "sfm/defines.h"
+#include "sfm/pba_types.h"
+
+SFM_NAMESPACE_BEGIN
 
 class ConfigBA
 {
@@ -145,8 +146,8 @@ protected:
     int     __selected_device;
     int     __cpu_data_precision;
     int     __bundle_time_budget;
-    int		__bundle_mode_next;
-    int		__bundle_current_mode;
+    BundleModeT		__bundle_mode_next;
+    BundleModeT		__bundle_current_mode;
     //////////////////////////////
     float   __initial_mse;
     float   __final_mse;
@@ -173,7 +174,7 @@ protected:
     bool             __matlab_format_stat;
     char*            __stat_filename;
     const char*      __driver_output;
-    vector<float>    __bundle_records;
+    std::vector<float>    __bundle_records;
     double           __timer_record[NUM_TIMER];
     int              __num_cpu_thread_all;
     int              __num_cpu_thread[NUM_FUNC];
@@ -195,8 +196,6 @@ protected:
     bool    IsTimeBudgetAvailable();
     double  MyClock();
 public:
-    void    ParseParam(int argc, char** argv);
-public:
     //the following are to be called after finishing BA
     const char* GetOutputParam() {return __driver_output; }
     float   GetInitialMSE(){return __initial_mse; }
@@ -207,8 +206,8 @@ public:
     int		GetCurrentDevice(){return __current_device;}
     int		GetBundleReturnCode() {return __pba_return_code;}
     int		GetActiveDevice() {return __selected_device;}
-
-
 };
-#endif
 
+SFM_NAMESPACE_END
+
+#endif // SFM_PBA_CONFIG_HEADER

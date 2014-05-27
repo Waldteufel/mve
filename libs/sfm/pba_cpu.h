@@ -1,7 +1,4 @@
 ////////////////////////////////////////////////////////////////////////////
-//	File:		    SparseBundleCPU.h
-//	Author:		    Changchang Wu (ccwu@cs.washington.edu)
-//	Description :   interface of the CPU-version of multi-core bundle adjustment
 //
 //  Copyright (c) 2011  Changchang Wu (ccwu@cs.washington.edu)
 //    and the University of Washington at Seattle
@@ -18,10 +15,18 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-#if !defined(SPARSE_BUNDLE_CPU_H)
-#define SPARSE_BUNDLE_CPU_H
+#ifndef SFM_PBA_CPU_HEADER
+#define SFM_PBA_CPU_HEADER
 
-#include <malloc.h>
+#include <memory>
+
+#include "sfm/defines.h"
+#include "sfm/pba_types.h"
+#include "sfm/pba_config.h"
+
+#include "util/aligned_vector.h"
+
+SFM_NAMESPACE_BEGIN
 
 //BYTE-ALIGNMENT for data allocation (16 required for SSE, 32 required for AVX)
 //PREVIOUS version uses only SSE. The new version will include AVX.
@@ -31,132 +36,28 @@
 #define VECTOR_ALIGNMENT_MASK (VECTOR_ALIGNMENT - 1)
 #define ALIGN_PTR(p)	  (( ((size_t) p) + VECTOR_ALIGNMENT_MASK)  & (~VECTOR_ALIGNMENT_MASK))
 
-template <class Float> class avec
-{
-    bool   _owner;
-    Float* _data;
-    Float* _last;
-    size_t _size;
-    size_t _capacity;
-public:
-    static Float* allocate(size_t count)
-    {
-        size_t size = count * sizeof(Float);
-#ifdef _MSC_VER
-        Float* p = (Float*) _aligned_malloc(size, VECTOR_ALIGNMENT);
-        if(p == NULL) throw std::bad_alloc();
-        return p;
-#else
-        char * p = (char*) malloc(size + VECTOR_ALIGNMENT + 4);
-        if(p == NULL) throw std::bad_alloc();
-        char * p1 = p + 1;
-        char * p2 = (char*) ALIGN_PTR(p1);//(char*) (((((size_t)p1) + 15) >> 4) << 4);
-        char * p3 = ( p2 - 1);
-        p3[0] = (p2 - p);
-        return (Float*) p2;
-#endif
+template<class Float>
+struct avec : public std::vector<Float, util::AlignedAllocator<Float, VECTOR_ALIGNMENT> > {
+    avec<Float>() { }
+    avec<Float>(std::size_t sz) : std::vector<Float, util::AlignedAllocator<Float, VECTOR_ALIGNMENT> >(sz) { }
 
-    }
-    static void deallocate(void* p)
-    {
-#ifdef _MSC_VER
-        _aligned_free(p);
-#else
-        char* p3 = ((char*) p) - 1;
-        free(((char*) p) - p3[0]);
-#endif
-    }
+    Float *begin() { return &this->front(); }
+    Float *end() { return &this->back() + 1; }
 
-public:
-    avec()
-    {
-        _owner = true;
-        _last = _data = NULL;
-        _size = _capacity = 0;
-    }
-    avec(size_t count)
-    {
-        _data = allocate(count);
-        _size = _capacity = count;
-        _last = _data + count;
-        _owner = true;
-    }
-    ~avec()
-    {
-        if(_data && _owner) deallocate(_data);
-    }
+    const Float *begin() const { return &this->front(); }
+    const Float *end() const { return &this->back() + 1; }
 
-    inline void resize(size_t newcount)
-    {
-        if(!_owner)
-        {
-            _data = _last = NULL;
-            _capacity = _size = 0;
-            _owner = true;
-        }
-        if(newcount <= _capacity)
-        {
-            _size = newcount;
-            _last = _data + newcount;
-        }else
-        {
-            if(_data && _owner) deallocate(_data);
-            _data = allocate(newcount);
-            _size = _capacity = newcount;
-            _last = _data + newcount;
-        }
-    }
+    operator Float *() { return &this->front(); }
+    operator const Float *() const { return &this->front(); }
 
-    inline void set(Float* data, size_t count)
-    {
-        if(_data && _owner) deallocate(_data);
-        _data = data;
-        _owner = false;
-        _size = count;
-        _last = _data + _size;
-        _capacity = count;
-    }
-    inline void swap(avec<Float>& next)
-    {
-        bool _owner_bak = _owner;
-        Float* _data_bak = _data;
-        Float* _last_bak = _last;
-        size_t _size_bak = _size;
-        size_t _capa_bak = _capacity;
-
-        _owner = next._owner;
-        _data = next._data;
-        _last = next._last;
-        _size = next._size;
-        _capacity = next._capacity;
-
-        next._owner = _owner_bak;
-        next._data = _data_bak;
-        next._last = _last_bak;
-        next._size = _size_bak;
-        next._capacity = _capa_bak;
-
-    }
-
-    inline operator Float* ()               {return _size? _data : NULL;}
-    inline operator const Float* () const    {return _data; }
-    inline Float* begin()                   {return _size? _data : NULL;}
-    inline Float* data()                   {return _size? _data : NULL;}
-    inline Float* end()                     {return _last;}
-    inline const Float* begin() const       {return _size? _data : NULL;}
-    inline const Float* end()   const       {return _last;}
-    inline size_t size() const              {return _size;}
-    inline size_t IsValid() const           {return _size;}
-    void   SaveToFile(const char* name);
+    void set(Float* start, size_t n) { this->assign(start, start + n); }
 };
 
-template<class Float>
-class SparseBundleCPU : public ParallelBA, public ConfigBA
+class SparseBundleCPU : protected ConfigBA
 {
 public:
-    typedef avec<Float>   VectorF;
-    typedef vector<int>   VectorI;
-    typedef float         float_t;
+    typedef avec<double>   VectorF;
+    typedef std::vector<int>   VectorI;
 
 protected:      //cpu data
     int             _num_camera;
@@ -212,8 +113,8 @@ protected:
     VectorF		 _cuCameraQMapW;
     VectorF		 _cuCameraQListW;
 protected:
-    bool		ProcessIndexCameraQ(vector<int>&qmap, vector<int>& qlist);
-    void		ProcessWeightCameraQ(vector<int>&cpnum, vector<int>&qmap, Float* qmapw, Float* qlistw);
+    bool		ProcessIndexCameraQ(std::vector<int>&qmap, std::vector<int>& qlist);
+    void		ProcessWeightCameraQ(std::vector<int>&cpnum, std::vector<int>&qmap, double* qmapw, double* qlistw);
 
 protected:      //internal functions
     int         ValidateInputData();
@@ -232,11 +133,11 @@ protected:      //internal functions
 protected:
     void        PrepareJacobianNormalization();
     void        EvaluateJacobians();
-    void        ComputeJtE(VectorF& E, VectorF& JtE, int mode = 0);
-    void        ComputeJX(VectorF& X, VectorF& JX, int mode = 0);
+    void        ComputeJtE(VectorF& E, VectorF& JtE, BundleModeT mode = BUNDLE_FULL);
+    void        ComputeJX(VectorF& X, VectorF& JX, BundleModeT mode = BUNDLE_FULL);
     void        ComputeDiagonal(VectorF& JJI);
     void        ComputeBlockPC(float lambda, bool dampd);
-    void        ApplyBlockPC(VectorF& v, VectorF& pv, int mode = 0);
+    void        ApplyBlockPC(VectorF& v, VectorF& pv, BundleModeT mode = BUNDLE_FULL);
     float       UpdateCameraPoint(VectorF& dx, VectorF& cuImageTempProj);
     float       EvaluateProjection(VectorF& cam, VectorF&point, VectorF& proj);
     float       EvaluateProjectionX(VectorF& cam, VectorF&point, VectorF& proj);
@@ -250,8 +151,6 @@ protected:
     void        RunProfileSteps();
     void        RunTestIterationLM(bool reduced);
     void        DumpCooJacobian();
-private:
-    static int	FindProcessorCoreNum();
 public:
 
     virtual void AbortBundleAdjustment()                    {__abort_flag = true;}
@@ -260,7 +159,6 @@ public:
     virtual void SetNextBundleMode(BundleModeT mode)		{__bundle_mode_next = mode;}
     virtual void SetFixedIntrinsics(bool fixed)            {__fixed_intrinsics = fixed; }
     virtual void EnableRadialDistortion(DistortionT type)   {__use_radial_distortion = type; }
-    virtual void ParseParam(int narg, char** argv)          {ConfigBA::ParseParam(narg, argv); }
     virtual ConfigBA* GetInternalConfig()                   {return this; }
 public:
     SparseBundleCPU();
@@ -272,6 +170,6 @@ public:
     virtual int RunBundleAdjustment();
 };
 
-ParallelBA* NewSparseBundleCPU(bool dp);
-#endif
+SFM_NAMESPACE_END
 
+#endif // SFM_PBA_CPU_HEADER

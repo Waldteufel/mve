@@ -1,7 +1,4 @@
 ////////////////////////////////////////////////////////////////////////////
-//  File:           ConfigBA.cpp
-//  Author:         Changchang Wu
-//  Description :   implementation of the configuration object class
 //
 //  Copyright (c) 2011  Changchang Wu (ccwu@cs.washington.edu)
 //    and the University of Washington at Seattle
@@ -18,22 +15,22 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-#include <string.h>
+#include <cstring>
 #include <iostream>
-#include <time.h>
+#include <ctime>
 #include <iomanip>
 #include <fstream>
 #include <string>
 
-using std::cout;
-using std::ofstream;
-using std::string;
+#include "sfm/pba_config.h"
+
+SFM_NAMESPACE_BEGIN
 
 #ifndef _WIN32
-        #include <sys/time.h>
+    #include <sys/time.h>
 #endif
 
-#include "pba_config.h"
+#include "sfm/pba_config.h"
 
 #ifdef _MSC_VER
 #define strcpy  strcpy_s
@@ -53,8 +50,8 @@ ConfigBA::ConfigBA()
     __lm_check_gradient = false;
     __lm_damping_auto_switch = 0;
     __bundle_time_budget = 0;
-    __bundle_mode_next = 0;
-    __bundle_current_mode = 0;
+    __bundle_mode_next = BUNDLE_FULL;
+    __bundle_current_mode = BUNDLE_FULL;
 
     ////////////////////////////
     __cg_max_iteration = 100;
@@ -151,8 +148,8 @@ void ConfigBA::ResetTemporarySetting()
 {
     __reset_initial_distortion = false;
     __bundle_time_budget = 0;
-    __bundle_mode_next= 0;
-    __bundle_current_mode = 0;
+    __bundle_mode_next= BUNDLE_FULL;
+    __bundle_current_mode = BUNDLE_FULL;
     __stat_filename = NULL;
     if(__lm_damping_auto_switch > 0 && !__lm_use_diagonal_damp) __lm_use_diagonal_damp = true;
 }
@@ -183,7 +180,7 @@ void ConfigBA::SaveBundleStatistics(int ncam, int npt, int nproj)
             );
 
         ///////////////////////////////////////////////////////
-        ofstream out(filenamebuf);     out << std::left;
+        std::ofstream out(filenamebuf);     out << std::left;
 
         float overhead = (BundleTimerGet(TIMER_OVERALL) - BundleTimerGet(TIMER_OPTIMIZATION));
         if(__matlab_format_stat) out
@@ -319,228 +316,4 @@ void ConfigBA::SaveBundleRecord(int iter, float res, float damping, float gn, fl
     __bundle_records.push_back(gi);
 }
 
-void ConfigBA::ParseParam(int argc, char** argv)
-{
-    #define CHAR1_TO_INT(x)         ((x >= 'A' && x <= 'Z') ? x + 32 : x)
-    #define CHAR2_TO_INT(str, i)    (str[i] ? CHAR1_TO_INT(str[i]) + (CHAR1_TO_INT(str[i+1]) << 8) : 0)
-    #define CHAR3_TO_INT(str, i)    (str[i] ? CHAR1_TO_INT(str[i]) + (CHAR2_TO_INT(str, i + 1) << 8) : 0)
-    #define STRING_TO_INT(str)      (CHAR1_TO_INT(str[0]) +  (CHAR3_TO_INT(str, 1) << 8))
-
-#ifdef _MSC_VER
-    //charizing is microsoft only
-    #define MAKEINT1(a)             (#@a )
-    #define sscanf sscanf_s
-#else
-    #define mychar0    '0'
-    #define mychar1    '1'
-    #define mychar2    '2'
-    #define mychar3    '3'
-    #define mychara    'a'
-    #define mycharb    'b'
-    #define mycharc    'c'
-    #define mychard    'd'
-    #define mychare    'e'
-    #define mycharf    'f'
-    #define mycharg    'g'
-    #define mycharh    'h'
-    #define mychari    'i'
-    #define mycharj    'j'
-    #define mychark    'k'
-    #define mycharl    'l'
-    #define mycharm    'm'
-    #define mycharn    'n'
-    #define mycharo    'o'
-    #define mycharp    'p'
-    #define mycharq    'q'
-    #define mycharr    'r'
-    #define mychars    's'
-    #define mychart    't'
-    #define mycharu    'u'
-    #define mycharv    'v'
-    #define mycharw    'w'
-    #define mycharx    'x'
-    #define mychary    'y'
-    #define mycharz    'z'
-    #define MAKEINT1(a)             (mychar##a )
-#endif
-    #define MAKEINT2(a, b)          (MAKEINT1(a) + (MAKEINT1(b) << 8))
-    #define MAKEINT3(a, b, c)       (MAKEINT1(a) + (MAKEINT2(b, c) << 8))
-    #define MAKEINT4(a, b, c, d)    (MAKEINT1(a) + (MAKEINT3(b, c, d) << 8))
-
-    char* arg, *param, * opt;
-    int  opti, argi; float argf;
-    for(int i = 0; i < argc; i++)
-    {
-        arg = argv[i];
-        if(arg == NULL || arg[0] != '-' || !arg[1])continue;
-        opt = arg+1;
-        opti = STRING_TO_INT(opt);
-        param = argv[i+1];
-
-        ////////////////////////////////
-        switch(opti)
-        {
-        case MAKEINT3(l, m, i):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi > 0) __lm_max_iteration = argi;
-            break;
-        case MAKEINT3(l, m, d):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf >= 0) __lm_delta_threshold = argf;
-            break;
-        case MAKEINT3(l, m, e):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf >= 0) __lm_mse_threshold = argf;
-            break;
-        case MAKEINT3(l, m, g):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __lm_gradient_threshold = argf;
-            break;
-        case MAKEINT4(d, a, m, p):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __lm_initial_damp = argf;
-            break;
-        case MAKEINT4(d, m, i, n):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __lm_minimum_damp = argf;
-            break;
-        case MAKEINT4(d, m, a, x):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __lm_maximum_damp = argf;
-            break;
-        case MAKEINT3(c, g, i):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi > 0) __cg_max_iteration = argi;
-            break;
-        case MAKEINT4(c, g, i, m):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi > 0) __cg_min_iteration = argi;
-            break;
-        case MAKEINT3(c, g, n):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __cg_norm_threshold = argf;
-            break;
-        case MAKEINT3(c, g, g):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __cg_norm_guard = argf;
-            break;
-        case MAKEINT4(c, g, r, f):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi > 0) __cg_recalculate_freq = argi;
-            break;
-        case MAKEINT1(v):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi >= 0 ) __verbose_level = argi;
-            break;
-        case MAKEINT4(d, e, v, i):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi >= 0 ) __selected_device = argi;
-            break;
-        case MAKEINT4(b, u, d, g):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi >= 0 ) __bundle_time_budget = argi;
-            break;
-        case MAKEINT3(e, x,  p):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi >= 0 ) __pba_experimental = argi;
-            break;
-        case MAKEINT4(t, n, u, m):
-            if(i + 1 < argc && sscanf(param, "%d", &argi) && argi > 0 ) __num_cpu_thread_all = argi;
-            break;
-       case MAKEINT4(p, r, o, f):
-           __profile_pba = (i + 1 < argc && sscanf(param, "%d", &argi)) ? std::max(10, argi) : 100;
-            break;
-       case MAKEINT4(t, p, r, o):
-           __cpu_thread_profile = true;
-            break;
-        case MAKEINT4(c, a, l, i):
-            __fixed_intrinsics = true;
-            break;
-        case MAKEINT4(s, c, h, u):
-        case MAKEINT4(s, s, o, r):
-            __cg_schur_complement = true;
-            break;
-        case MAKEINT2(m, d):
-        case MAKEINT4(r, a, d, i):
-            __use_radial_distortion = -1;
-            break;
-        case MAKEINT2(p, d):
-            __use_radial_distortion = 1;
-            break;
-        case MAKEINT3(r, 0, 0):
-            __reset_initial_distortion = true;
-            break;
-        case MAKEINT4(v, a, r, i):
-            __fixed_intrinsics = false;
-            break;
-        case MAKEINT4(n, a, c, c):
-            __accurate_gain_ratio = false;
-            break;
-        case MAKEINT4(v, c, g, i):
-            __verbose_cg_iteration = true;
-            break;
-        case MAKEINT4(v, f, u, n):
-            __verbose_function_time = true;
-            break;
-        case MAKEINT4(v, a, l, l):
-            __verbose_allocation = true;
-            break;
-        case MAKEINT4(v, s, s, e):
-            __verbose_sse = true;
-            break;
-        case MAKEINT4(s, v, g, n):
-            __save_gradient_norm = true;
-            break;
-        case MAKEINT2(i, d):
-            __lm_use_diagonal_damp = false;
-            break;
-        case MAKEINT3(d, a, s):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0)  __lm_damping_auto_switch = std::max(argf, 0.1f);
-            else __lm_damping_auto_switch = 2.0f;
-            break;
-        case MAKEINT4(c, h, k, g):
-            __lm_check_gradient = true;
-            break;
-        case MAKEINT4(n, o, j, n):
-            __jacobian_normalize = false;
-            break;
-        case MAKEINT2(n, j):
-            __no_jacobian_store = true;
-        case MAKEINT3(n, j, c):
-            __jc_store_transpose = false;
-            __jc_store_original = false;
-            break;
-        case MAKEINT4(n, j, c, o):
-            __jc_store_original = false;
-            break;
-        case MAKEINT4(n, j, c, t):
-            __jc_store_transpose = false;
-            break;
-        case MAKEINT3(j, x, j):
-            __multiply_jx_usenoj = false;
-            break;
-        case MAKEINT4(j, x, n, j):
-            __multiply_jx_usenoj = true;
-            break;
-        case MAKEINT4(n, o, d, n):
-            __depth_normalize = false;
-            __focal_normalize = false;
-            break;
-        case MAKEINT4(n, o, d, f):
-            __depth_degeneracy_fix = false;
-            break;
-        case MAKEINT4(n, o, r, m):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0) __data_normalize_median = argf;
-            break;
-        case MAKEINT3(d, c, e):
-            if(i + 1 < argc && sscanf(param, "%f", &argf) && argf > 0 && argf <= 0.01) __depth_check_epsilon = argf;
-            break;
-        case MAKEINT4(d, e, b, u):
-            __debug_pba = true;
-            break;
-        case MAKEINT4(e, v, a, l):
-            __lm_max_iteration = 100;
-            __warmup_device = true;
-        case MAKEINT4(s, t, a, t):
-            __stat_filename = (i + 1 < argc && param[0] != '-')? param : NULL;
-            break;
-        case MAKEINT3(o, u, t):
-            __driver_output = (i + 1 < argc && param[0] != '-')? param : NULL;
-            break;
-        case MAKEINT4(w, a, r, m):
-            __warmup_device = true;
-            break;
-        case MAKEINT4(m, o, t, i):
-            __bundle_mode_next = 1;
-            break;
-        case MAKEINT4(s, t, r, u):
-            __bundle_mode_next = 2;
-            break;
-        }
-    }
-}
-
+SFM_NAMESPACE_END

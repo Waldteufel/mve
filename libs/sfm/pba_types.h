@@ -1,7 +1,4 @@
 ////////////////////////////////////////////////////////////////////////////
-//	File:		    DataInterface.h
-//	Author:		    Changchang Wu (ccwu@cs.washington.edu)
-//	Description :   data interface, the data format been uploaded to GPU
 //
 //  Copyright (c) 2011  Changchang Wu (ccwu@cs.washington.edu)
 //    and the University of Washington at Seattle
@@ -18,12 +15,50 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifndef DATA_INTERFACE_GPU_H
-#define DATA_INTERFACE_GPU_H
+#ifndef SFM_PBA_TYPES_HEADER
+#define SFM_PBA_TYPES_HEADER
 
-#include <math.h>
+#include <cmath>
+
+#include "sfm/defines.h"
+
+SFM_NAMESPACE_BEGIN
 
 #define PBA_PI 3.14159265358979323846
+
+enum StatusT
+{
+    STATUS_SUCCESS = 0,
+    STATUS_CAMERA_MISSING = 1,
+    STATUS_POINT_MISSING,
+    STATUS_PROJECTION_MISSING,
+    STATUS_MEASURMENT_MISSING,
+    STATUS_ALLOCATION_FAIL
+};
+
+enum DeviceT
+{
+    PBA_INVALID_DEVICE = -4,
+    PBA_CPU_DOUBLE = -3,
+    PBA_CPU_FLOAT = -2,
+    PBA_CUDA_DEVICE_DEFAULT = -1,
+    PBA_CUDA_DEVICE0 = 0
+};
+
+enum DistortionT
+{
+    PBA_MEASUREMENT_DISTORTION = -1, //single parameter, apply to measurements
+    PBA_NO_DISTORTION = 0,           //no radial distortion
+    PBA_PROJECTION_DISTORTION = 1    //single parameter, apply to projectino
+};
+
+enum BundleModeT
+{
+    BUNDLE_FULL = 0,
+    BUNDLE_ONLY_MOTION = 1,
+    BUNDLE_ONLY_STRUCTURE = 2
+};
+
 
 // ----------------------------WARNING------------------------------
 // -----------------------------------------------------------------
@@ -41,31 +76,27 @@
 // ---------------------------------------------------------------------------
 
 //transfer data type with 4-float alignment
-#define CameraT CameraT_
-#define Point3D Point3D_
 
-template <class FT>
-struct CameraT_
+struct CameraT
 {
-    typedef FT float_t;
     //////////////////////////////////////////////////////
-    float_t		f;					// single focal length, K = [f, 0, 0; 0 f 0; 0 0 1]
-    float_t		t[3];				// T in  P = K[R T], T = - RC
-    float_t		m[3][3];			// R in  P = K[R T].
-    float_t		radial;				// WARNING: BE careful with the radial distortion model.
+    float		f;					// single focal length, K = [f, 0, 0; 0 f 0; 0 0 1]
+    float		t[3];				// T in  P = K[R T], T = - RC
+    float		m[3][3];			// R in  P = K[R T].
+    float		radial;				// WARNING: BE careful with the radial distortion model.
     int			distortion_type;
-    float_t		constant_camera;
+    float		constant_camera;
 
     //////////////////////////////////////////////////////////
-    CameraT_(){    radial = 0;  distortion_type = 0;  constant_camera = 0;  }
+    CameraT(){    radial = 0;  distortion_type = 0;  constant_camera = 0;  }
 
     //////////////////////////////////////////////
-    template <class CameraX>   void SetCameraT(const CameraX & cam)
+    void SetCameraT(const CameraT& cam)
     {
-        f = (float_t) cam.f;
-        t[0] = (float_t)cam.t[0];    t[1] = (float_t)cam.t[1];    t[2] = (float_t)cam.t[2];
-        for(int i = 0; i < 3; ++i) for(int j = 0; j < 3; ++j) m[i][j] = (float_t)cam.m[i][j];
-        radial = (float_t) cam.radial;
+        f = (float) cam.f;
+        t[0] = (float)cam.t[0];    t[1] = (float)cam.t[1];    t[2] = (float)cam.t[2];
+        for(int i = 0; i < 3; ++i) for(int j = 0; j < 3; ++j) m[i][j] = (float)cam.m[i][j];
+        radial = (float) cam.radial;
         distortion_type = cam.distortion_type;
         constant_camera = cam.constant_camera;
     }
@@ -77,37 +108,38 @@ struct CameraT_
     //void SetFixedExtrinsic()	{constant_camera = 3.0f;}
 
     //////////////////////////////////////
-    template <class Float>		void SetFocalLength(Float F){        f = (float_t) F;    }
-    float_t GetFocalLength()	const{return f;}
+    void SetFocalLength(float F){        f = F;    }
+    float GetFocalLength()	const{return f;}
 
-    template <class Float>		void SetMeasumentDistortion(Float r)    {radial = (float_t) r; distortion_type = -1;}
-    float_t GetMeasurementDistortion() const {return distortion_type == -1 ? radial : 0; }
+    void SetMeasumentDistortion(float r)    {radial = r; distortion_type = -1;}
+    float GetMeasurementDistortion() const {return distortion_type == -1 ? radial : 0; }
 
     //normalize radial distortion that applies to angle will be (radial * f * f);
-    template <class Float>		void SetNormalizedMeasurementDistortion(Float r)  {SetMeasumentDistortion(r / (f * f)); }
-    float_t GetNormalizedMeasurementDistortion()  const{return GetMeasurementDistortion() * (f * f); }
+    void SetNormalizedMeasurementDistortion(float r)  {SetMeasumentDistortion(r / (f * f)); }
+    float GetNormalizedMeasurementDistortion()  const{return GetMeasurementDistortion() * (f * f); }
 
     //use projection distortion
-    template <class Float>		void SetProjectionDistortion(Float r)   {radial = float_t(r);  distortion_type = 1; }
-    template <class Float>		void SetProjectionDistortion(const Float* r)   {SetProjectionDistortion(r[0]); }
-    float_t GetProjectionDistortion()  {return distortion_type == 1 ? radial : 0; }
+    void SetProjectionDistortion(float r)   {radial = r;  distortion_type = 1; }
+    void SetProjectionDistortion(const float* r)   {SetProjectionDistortion(r[0]); }
+    float GetProjectionDistortion()  {return distortion_type == 1 ? radial : 0; }
 
-    template <class Float>		void SetRodriguesRotation(const Float r[3])
+    void SetRodriguesRotation(const float r[3])
     {
         double a = sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]);
         double ct = a==0.0?0.5:(1.0-cos(a))/a/a;
         double st = a==0.0?1:sin(a)/a;
-        m[0][0]=float_t(1.0 - (r[1]*r[1] + r[2]*r[2])*ct);
-        m[0][1]=float_t(r[0]*r[1]*ct - r[2]*st);
-        m[0][2]=float_t(r[2]*r[0]*ct + r[1]*st);
-        m[1][0]=float_t(r[0]*r[1]*ct + r[2]*st);
-        m[1][1]=float_t(1.0 - (r[2]*r[2] + r[0]*r[0])*ct);
-        m[1][2]=float_t(r[1]*r[2]*ct - r[0]*st);
-        m[2][0]=float_t(r[2]*r[0]*ct - r[1]*st);
-        m[2][1]=float_t(r[1]*r[2]*ct + r[0]*st);
-        m[2][2]=float_t(1.0 - (r[0]*r[0] + r[1]*r[1])*ct );
+        m[0][0]=float(1.0 - (r[1]*r[1] + r[2]*r[2])*ct);
+        m[0][1]=float(r[0]*r[1]*ct - r[2]*st);
+        m[0][2]=float(r[2]*r[0]*ct + r[1]*st);
+        m[1][0]=float(r[0]*r[1]*ct + r[2]*st);
+        m[1][1]=float(1.0 - (r[2]*r[2] + r[0]*r[0])*ct);
+        m[1][2]=float(r[1]*r[2]*ct - r[0]*st);
+        m[2][0]=float(r[2]*r[0]*ct - r[1]*st);
+        m[2][1]=float(r[1]*r[2]*ct + r[0]*st);
+        m[2][2]=float(1.0 - (r[0]*r[0] + r[1]*r[1])*ct );
     }
-    template <class Float>     void GetRodriguesRotation(Float r[3]) const
+
+    void GetRodriguesRotation(float r[3]) const
     {
         double a = (m[0][0]+m[1][1]+m[2][2]-1.0)/2.0;
         const double epsilon = 0.01;
@@ -125,7 +157,7 @@ struct CameraT_
             }
             else
             {
-                const Float ha = Float(sqrt(0.5) * PBA_PI);
+                const float ha = std::sqrt(0.5) * PBA_PI;
                 double xx = (m[0][0]+1.0)/2.0;
                 double yy = (m[1][1]+1.0)/2.0;
                 double zz = (m[2][2]+1.0)/2.0;
@@ -140,10 +172,10 @@ struct CameraT_
                         r[0] = 0;    r[1] = r[2] = ha;
                     } else
                     {
-                        double t = sqrt(xx) ;
-                        r[0] = Float(t * PBA_PI);
-                        r[1] = Float(xy/t * PBA_PI);
-                        r[2] = Float(xz/t * PBA_PI);
+                        double t = std::sqrt(xx) ;
+                        r[0] = t * PBA_PI;
+                        r[1] = xy/t * PBA_PI;
+                        r[2] = xz/t * PBA_PI;
                     }
                 } else if (yy > zz)
                 {
@@ -152,10 +184,10 @@ struct CameraT_
                         r[0] = r[2]  = ha; r[1] = 0;
                     } else
                     {
-                        double t = sqrt(yy);
-                        r[0] = Float(xy/t* PBA_PI);
-                        r[1] = Float( t * PBA_PI);
-                        r[2] = Float(yz/t* PBA_PI);
+                        double t = std::sqrt(yy);
+                        r[0] = xy/t* PBA_PI;
+                        r[1] =  t * PBA_PI;
+                        r[2] = yz/t* PBA_PI;
                     }
                 } else
                 {
@@ -164,27 +196,27 @@ struct CameraT_
                         r[0] = r[1] = ha; r[2] = 0;
                     } else
                     {
-                        double t  = sqrt(zz);
-                        r[0]  = Float(xz/ t* PBA_PI);
-                        r[1]  = Float(yz/ t* PBA_PI);
-                        r[2]  = Float( t * PBA_PI);
+                        double t  = std::sqrt(zz);
+                        r[0]  = xz/ t* PBA_PI;
+                        r[1]  = yz/ t* PBA_PI;
+                        r[2]  =  t * PBA_PI;
                     }
                 }
             }
         }
         else
         {
-            a = acos(a);
-            double b = 0.5*a/sin(a);
-            r[0]    =    Float(b*(m[2][1]-m[1][2]));
-            r[1]    =    Float(b*(m[0][2]-m[2][0]));
-            r[2]    =    Float(b*(m[1][0]-m[0][1]));
+            a = std::acos(a);
+            double b = 0.5*a/std::sin(a);
+            r[0]    =    b*(m[2][1]-m[1][2]);
+            r[1]    =    b*(m[0][2]-m[2][0]);
+            r[2]    =    b*(m[1][0]-m[0][1]);
         }
     }
     ////////////////////////
-    template <class Float>     void SetQuaternionRotation(const Float q[4])
+    void SetQuaternionRotation(const float q[4])
     {
-        double qq = sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3]);
+        double qq = std::sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3]);
         double qw, qx, qy, qz;
         if(qq>0)
         {
@@ -197,22 +229,23 @@ struct CameraT_
             qw = 1;
             qx = qy = qz = 0;
         }
-        m[0][0]=float_t(qw*qw + qx*qx- qz*qz- qy*qy );
-        m[0][1]=float_t(2*qx*qy -2*qz*qw );
-        m[0][2]=float_t(2*qy*qw + 2*qz*qx);
-        m[1][0]=float_t(2*qx*qy+ 2*qw*qz);
-        m[1][1]=float_t(qy*qy+ qw*qw - qz*qz- qx*qx);
-        m[1][2]=float_t(2*qz*qy- 2*qx*qw);
-        m[2][0]=float_t(2*qx*qz- 2*qy*qw);
-        m[2][1]=float_t(2*qy*qz + 2*qw*qx );
-        m[2][2]=float_t(qz*qz+ qw*qw- qy*qy- qx*qx);
+        m[0][0] = qw*qw + qx*qx- qz*qz- qy*qy;
+        m[0][1] = 2*qx*qy -2*qz*qw;
+        m[0][2] = 2*qy*qw + 2*qz*qx;
+        m[1][0] = 2*qx*qy+ 2*qw*qz;
+        m[1][1] = qy*qy+ qw*qw - qz*qz- qx*qx;
+        m[1][2] = 2*qz*qy- 2*qx*qw;
+        m[2][0] = 2*qx*qz- 2*qy*qw;
+        m[2][1] = 2*qy*qz + 2*qw*qx;
+        m[2][2] = qz*qz+ qw*qw- qy*qy- qx*qx;
     }
-    template <class Float>     void GetQuaternionRotation(Float q[4]) const
+
+    void GetQuaternionRotation(float q[4]) const
     {
         q[0]= 1 + m[0][0] + m[1][1] + m[2][2];
         if(q[0]>0.000000001)
         {
-            q[0] = sqrt(q[0])/2.0;
+            q[0] = std::sqrt(q[0])/2.0;
             q[1]= (m[2][1] - m[1][2])/( 4.0 *q[0]);
             q[2]= (m[0][2] - m[2][0])/( 4.0 *q[0]);
             q[3]= (m[1][0] - m[0][1])/( 4.0 *q[0]);
@@ -221,21 +254,21 @@ struct CameraT_
             double s;
             if ( m[0][0] > m[1][1] && m[0][0] > m[2][2] )
             {
-              s = 2.0 * sqrt( 1.0 + m[0][0] - m[1][1] - m[2][2]);
+              s = 2.0 * std::sqrt( 1.0 + m[0][0] - m[1][1] - m[2][2]);
               q[1] = 0.25 * s;
               q[2] = (m[0][1] + m[1][0] ) / s;
               q[3] = (m[0][2] + m[2][0] ) / s;
               q[0] = (m[1][2] - m[2][1] ) / s;
             } else if (m[1][1] > m[2][2])
             {
-              s = 2.0 * sqrt( 1.0 + m[1][1] - m[0][0] - m[2][2]);
+              s = 2.0 * std::sqrt( 1.0 + m[1][1] - m[0][0] - m[2][2]);
               q[1] = (m[0][1] + m[1][0] ) / s;
               q[2] = 0.25 * s;
               q[3] = (m[1][2] + m[2][1] ) / s;
               q[0] = (m[0][2] - m[2][0] ) / s;
             } else
             {
-              s = 2.0 * sqrt( 1.0 + m[2][2] - m[0][0] - m[1][1] );
+              s = 2.0 * std::sqrt( 1.0 + m[2][2] - m[0][0] - m[1][1] );
               q[1] = (m[0][2] + m[2][0] ) / s;
               q[2] = (m[1][2] + m[2][1] ) / s;
               q[3] = 0.25f * s;
@@ -244,13 +277,13 @@ struct CameraT_
         }
     }
     ////////////////////////////////////////////////
-    template <class Float> void SetMatrixRotation(const Float * r)
+    void SetMatrixRotation(const float* r)
     {
-        for(int i = 0; i < 9; ++i) m[0][i] = float_t(r[i]);
+        for(int i = 0; i < 9; ++i) m[0][i] = r[i];
     }
-    template <class Float>    void GetMatrixRotation(Float * r) const
+    void GetMatrixRotation(float * r) const
     {
-        for(int i = 0; i < 9; ++i) r[i] = Float(m[0][i]);
+        for(int i = 0; i < 9; ++i) r[i] = m[0][i];
     }
     float GetRotationMatrixDeterminant()const
     {
@@ -262,38 +295,38 @@ struct CameraT_
                 m[0][0]*m[1][2]*m[2][1];
     }
     ///////////////////////////////////////
-    template <class Float>    void SetTranslation(const Float T[3])
+    void SetTranslation(const float T[3])
     {
-        t[0] = (float_t)T[0];
-        t[1] = (float_t)T[1];
-        t[2] = (float_t)T[2];
+        t[0] = T[0];
+        t[1] = T[1];
+        t[2] = T[2];
     }
-    template <class Float>    void GetTranslation(Float T[3])  const
+    void GetTranslation(float T[3])  const
     {
-        T[0] = (Float)t[0];
-        T[1] = (Float)t[1];
-        T[2] = (Float)t[2];
+        T[0] = t[0];
+        T[1] = t[1];
+        T[2] = t[2];
     }
     /////////////////////////////////////////////
-    template <class Float>    void SetCameraCenterAfterRotation(const Float c[3])
+    void SetCameraCenterAfterRotation(const float c[3])
     {
         //t = - R * C
-        for(int j = 0; j < 3; ++j) t[j] = -float_t(m[j][0] * c[0] + m[j][1] * c[1] + m[j][2] * c[2]);
+        for(int j = 0; j < 3; ++j) t[j] = -(m[j][0] * c[0] + m[j][1] * c[1] + m[j][2] * c[2]);
     }
-    template <class Float>    void GetCameraCenter(Float c[3])
+    void GetCameraCenter(float c[3])
     {
         //C = - R' * t
-        for(int j = 0; j < 3; ++j) c[j] = -float_t(m[0] [j]* t[0] + m[1][j] * t[1] + m[2][j] * t[2]);
+        for(int j = 0; j < 3; ++j) c[j] = -(m[0] [j]* t[0] + m[1][j] * t[1] + m[2][j] * t[2]);
     }
     ////////////////////////////////////////////
-    template <class Float>     void SetInvertedRT(const Float e[3], const Float T[3])
+    void SetInvertedRT(const float e[3], const float T[3])
     {
         SetRodriguesRotation(e);
         for(int i = 3; i < 9; ++i) m[0][i] = - m[0][i];
         SetTranslation(T); t[1] = - t[1]; t[2] = -t[2];
     }
 
-    template <class Float>     void GetInvertedRT (Float e[3], Float T[3]) const
+    void GetInvertedRT (float e[3], float T[3]) const
     {
         CameraT ci;    ci.SetMatrixRotation(m[0]);
         for(int i = 3; i < 9; ++i) ci.m[0][i] = - ci.m[0][i];
@@ -301,7 +334,8 @@ struct CameraT_
         ci.GetRodriguesRotation(e);
         GetTranslation(T);    T[1] = - T[1]; T[2] = -T[2];
     }
-    template <class Float>     void SetInvertedR9T(const Float e[9], const Float T[3])
+
+    void SetInvertedR9T(const float e[9], const float T[3])
     {
         //for(int i = 0; i < 9; ++i) m[0][i] = (i < 3 ? e[i] : - e[i]);
         //SetTranslation(T); t[1] = - t[1]; t[2] = -t[2];
@@ -310,7 +344,8 @@ struct CameraT_
         m[2][0] = -e[6];       m[2][1] = -e[7];     m[2][2] = -e[8];
         t[0] = T[0];           t[1] = -T[1];        t[2] = -T[2];
     }
-    template<class Float>	void GetInvertedR9T(Float e[9], Float T[3]) const
+
+    void GetInvertedR9T(float e[9], float T[3]) const
     {
         e[0] = m[0][0];        e[1] = m[0][1];      e[2] = m[0][2];
         e[3] = - m[1][0];      e[4] = -m[1][1];     e[5] = -m[1][2];
@@ -319,61 +354,18 @@ struct CameraT_
     }
 };
 
-
-
-template<class FT>
 struct Point3D
 {
-    typedef FT float_t;
-    float_t xyz[3];    //3D point location
-    float_t reserved;    //alignment
-    ////////////////////////////////
-    template <class Float> void SetPoint(Float x, Float y, Float z)
-    {
-        xyz[0] = (float_t) x;
-        xyz[1] = (float_t) y;
-        xyz[2] = (float_t) z;
-        reserved = 0;
-    }
-    template <class Float> void SetPoint(const Float * p)
-    {
-        xyz[0] = (float_t) p[0];
-        xyz[1] = (float_t) p[1];
-        xyz[2] = (float_t) p[2];
-        reserved = 0;
-    }
-    template <class Float> void GetPoint(Float* p)     const
-    {
-        p[0] = (Float) xyz[0];
-        p[1] = (Float) xyz[1];
-        p[2] = (Float) xyz[2];
-    }
-    template <class Float> void GetPoint(Float&x, Float&y, Float&z) const
-    {
-        x = (Float) xyz[0];
-        y = (Float) xyz[1];
-        z = (Float) xyz[2];
-    }
+    float xyz[3];    //3D point location
+    float reserved;    //alignment
 };
-
-#undef CameraT
-#undef Point3D
-
-typedef CameraT_<float>  CameraT;
-typedef CameraT_<double> CameraD;
-typedef Point3D_<float>  Point3D;
-typedef Point3D_<double> Point3B;
 
 struct Point2D
 {
     float x, y;
-    ////////////////////////////////////////////////////////
-    Point2D(){}
-    template <class Float> Point2D(Float X, Float Y)                {SetPoint2D(X, Y); }
-    template <class Float> void SetPoint2D(Float X, Float Y)        { x = (float) X; y = (float) Y; }
-    template <class Float> void GetPoint2D(Float&X, Float&Y)  const { X = (Float) x; Y = (Float) y; }
 };
 
 
-#endif
+SFM_NAMESPACE_END
 
+#endif // SFM_PBA_TYPES_HEADER
