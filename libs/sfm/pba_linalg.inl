@@ -1,11 +1,11 @@
 namespace ProgramCPU
 {
     int		__num_cpu_cores = 0;
-    template <class Float>   double ComputeVectorNorm(const avec<Float>& vec, int mt = 0);
+    template <class Float>   double ComputeVectorNorm(const avec& vec, int mt = 0);
 
 #if defined(CPUPBA_USE_SIMD)
     template <class Float>
-    void ComputeSQRT(avec<Float>& vec)
+    void ComputeSQRT(avec& vec)
     {
 #ifndef SIMD_NO_SQRT
         const size_t step =sse_step<Float>();
@@ -18,7 +18,7 @@ namespace ProgramCPU
     }
 
     template <class Float>
-    void ComputeRSQRT(avec<Float>& vec)
+    void ComputeRSQRT(avec& vec)
     {
         Float * p = &vec[0], * pe = p + vec.size();
         for(; p < pe; ++p) p[0] = (p[0] == 0? 0 : Float(1.0) / p[0]);
@@ -36,7 +36,7 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    void SetVectorZero(avec<Float>& vec)
+    void SetVectorZero(avec& vec)
     {
          Float * p = &vec[0], * pe = p + vec.size();
          SetVectorZero(p, pe);
@@ -69,7 +69,7 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    double ComputeVectorNormW(const avec<Float>& vec, const avec<Float>& weight)
+    double ComputeVectorNormW(const avec& vec, const avec& weight)
     {
         if(weight.begin() != NULL)
         {
@@ -92,7 +92,7 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    double ComputeVectorDot(const avec<Float>& vec1, const avec<Float>& vec2)
+    double ComputeVectorDot(const avec& vec1, const avec& vec2)
     {
          SSE_T sse = SSE_ZERO;
          const size_t step =sse_step<Float>();
@@ -109,7 +109,7 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    void   ComputeVXY(const avec<Float>& vec1, const avec<Float>& vec2, avec<Float>& result, size_t part = 0, size_t skip = 0)
+    void   ComputeVXY(const avec& vec1, const avec& vec2, avec& result, size_t part = 0, size_t skip = 0)
     {
         const size_t step =sse_step<Float>();
         const Float * p1 = vec1 + skip, * pe = p1 + (part ? part : vec1.size()), * pex = pe - step;
@@ -155,7 +155,7 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    void   ComputeSAX(Float a, const avec<Float>& vec1, avec<Float>& result)
+    void   ComputeSAX(Float a, const avec& vec1, avec& result)
     {
         const size_t step = sse_step<Float>();
         SSE_T aa = sse_load1(&a);
@@ -184,7 +184,7 @@ namespace ProgramCPU
 
 #else
     template <class Float>
-    void ComputeSQRT(avec<Float>& vec)
+    void ComputeSQRT(avec& vec)
     {
         Float* it = vec.begin();
         for(; it < vec.end(); ++it)
@@ -193,7 +193,7 @@ namespace ProgramCPU
         }
     }
     template <class Float>
-    void ComputeRSQRT(avec<Float>& vec)
+    void ComputeRSQRT(avec& vec)
     {
         Float* it = vec.begin();
         for(; it < vec.end(); ++it)
@@ -204,10 +204,10 @@ namespace ProgramCPU
     template <class Float>
     inline void SetVectorZero(Float* p,Float* pe)  { std::fill(p, pe, 0);                     }
     template <class Float>
-    inline void SetVectorZero(avec<Float>& vec)    { std::fill(vec.begin(), vec.end(), 0);    }
+    inline void SetVectorZero(avec& vec)    { std::fill(vec.begin(), vec.end(), 0);    }
 
     template <class Float>
-    double ComputeVectorNormW(const avec<Float>& vec, const avec<Float>& weight)
+    double ComputeVectorNormW(const avec& vec, const avec& weight)
     {
         double sum = 0;
         const Float*  it1 = vec.begin(), * it2 = weight.begin();
@@ -219,7 +219,7 @@ namespace ProgramCPU
     }
 
     template <class Float>
-    double ComputeVectorDot(const avec<Float>& vec1, const avec<Float>& vec2)
+    double ComputeVectorDot(const avec& vec1, const avec& vec2)
     {
         double sum = 0;
         const Float*   it1 = vec1.begin(), *it2 = vec2.begin();
@@ -237,7 +237,7 @@ namespace ProgramCPU
         *psum = sum;
     }
     template <class Float>
-    inline void   ComputeVXY(const avec<Float>& vec1, const avec<Float>& vec2, avec<Float>& result, size_t part =0, size_t skip = 0)
+    inline void   ComputeVXY(const avec& vec1, const avec& vec2, avec& result, size_t part =0, size_t skip = 0)
     {
         const Float*  it1 = vec1.begin() + skip, *it2 = vec2.begin() + skip;
         const Float*  ite = part ? (it1 + part) : vec1.end();
@@ -261,7 +261,7 @@ namespace ProgramCPU
 
 
     template <class Float>
-    void   ComputeSAX(Float a, const avec<Float>& vec1, avec<Float>& result)
+    void   ComputeSAX(Float a, const avec& vec1, avec& result)
     {
         const Float*  it1 = vec1.begin();
         Float* it3 = result.begin();
@@ -357,7 +357,7 @@ namespace ProgramCPU
             jx[1] = DotProduct8(jc + 8, xc) + (jp[3] * xp[0] + jp[4] * xp[1] + jp[5] * xp[2]);
     }
     template <class Float>
-    Float  ComputeVectorMax(const avec<Float>& vec)
+    Float  ComputeVectorMax(const avec& vec)
     {
         Float v = 0;
         const Float* it = vec.begin();
@@ -370,7 +370,7 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    void   ComputeSXYPZ(Float a, const avec<Float>& vec1, const avec<Float>& vec2, const avec<Float>& vec3, avec<Float>& result)
+    void   ComputeSXYPZ(Float a, const avec& vec1, const avec& vec2, const avec& vec3, avec& result)
     {
         if(vec1.begin() != NULL)
         {
@@ -395,7 +395,7 @@ namespace ProgramCPU
     END_THREAD_RPOC(ComputeSAXPY)
 
     template <class Float>
-    void   ComputeSAXPY(Float a, const avec<Float>& vec1, const avec<Float>& vec2, avec<Float>& result, int mt = 0)
+    void   ComputeSAXPY(Float a, const avec& vec1, const avec& vec2, avec& result, int mt = 0)
     {
         const bool auto_multi_thread = true;
         if(auto_multi_thread && mt == 0) {  mt = AUTO_MT_NUM( result.size() * 2);  }
@@ -426,7 +426,7 @@ namespace ProgramCPU
     END_THREAD_RPOC(ComputeVectorNorm)
 
     template <class Float>
-    double ComputeVectorNorm(const avec<Float>& vec, int mt)
+    double ComputeVectorNorm(const avec& vec, int mt)
     {
         const bool auto_multi_thread = true;
         if(auto_multi_thread && mt == 0) {  mt = AUTO_MT_NUM(vec.size());  }
@@ -472,7 +472,7 @@ namespace ProgramCPU
         m[8]=Float(1.0 - (r[0]*r[0] + r[1]*r[1])*ct );
     }
     template<class Float>
-    void UpdateCamera(int ncam, const avec<Float>& camera, const avec<Float>& delta, avec<Float>& new_camera)
+    void UpdateCamera(int ncam, const avec& camera, const avec& delta, avec& new_camera)
     {
         const Float * c = &camera[0], * d = &delta[0];
         Float * nc = &new_camera[0], m[9];
@@ -506,8 +506,8 @@ namespace ProgramCPU
     }
 
     template <class Float>
-    void  UpdateCameraPoint(int ncam, const avec<Float>& camera, const avec<Float>& point, avec<Float>& delta,
-                            avec<Float>& new_camera, avec<Float>& new_point, BundleModeT mode, int mt)
+    void  UpdateCameraPoint(int ncam, const avec& camera, const avec& point, avec& delta,
+                            avec& new_camera, avec& new_point, BundleModeT mode, int mt)
     {
         ////////////////////////////
         if(mode != BUNDLE_ONLY_STRUCTURE)
@@ -517,7 +517,7 @@ namespace ProgramCPU
         /////////////////////////////
         if(mode != BUNDLE_ONLY_MOTION)
         {
-            avec<Float> dp; dp.set(delta.begin() + 8 * ncam, point.size());
+            avec dp; dp.set(delta.begin() + 8 * ncam, point.size());
             ComputeSAXPY((Float) 1.0, dp, point, new_point, mt);
         }
     }
@@ -891,8 +891,8 @@ namespace ProgramCPU
 
     ///////////////////////////////////////
     template <class Float>
-    void  ComputeDiagonal( const avec<Float>& jcv, const std::vector<int>& cmapv, const avec<Float>& jpv, const std::vector<int>& pmapv,
-                        const std::vector<int>& cmlistv, const Float* qw0, avec<Float>& jtjdi, bool jc_transpose, int radial)
+    void  ComputeDiagonal( const avec& jcv, const std::vector<int>& cmapv, const avec& jpv, const std::vector<int>& pmapv,
+                        const std::vector<int>& cmlistv, const Float* qw0, avec& jtjdi, bool jc_transpose, int radial)
     {
         //first camera part
         if(jcv.size() == 0 || jpv.size() == 0) return; // not gonna happen
@@ -1209,9 +1209,9 @@ namespace ProgramCPU
     }
 
     template<class Float>
-    void ComputeDiagonalBlock_(float lambda, bool dampd, const avec<Float>& camerav,  const avec<Float>& pointv,
-                             const avec<Float>& meas,  const std::vector<int>& jmapv,  const avec<Float>& sjv,
-                             avec<Float>&qwv, avec<Float>& diag, avec<Float>& blocks,
+    void ComputeDiagonalBlock_(float lambda, bool dampd, const avec& camerav,  const avec& pointv,
+                             const avec& meas,  const std::vector<int>& jmapv,  const avec& sjv,
+                             avec&qwv, avec& diag, avec& blocks,
                              bool intrinsic_fixed, int radial_distortion, int mode = 0)
     {
         const int vn = radial_distortion? 8 : 7;
@@ -1220,7 +1220,7 @@ namespace ProgramCPU
         size_t npts = pointv.size()/POINT_ALIGN;
         size_t sz_jcd = ncam * 8;
         size_t sz_jcb = ncam * szbc;
-        avec<Float> blockpv(blocks.size());
+        avec blockpv(blocks.size());
         SetVectorZero(blockpv);
         SetVectorZero(diag);
         //////////////////////////////////////////////////////

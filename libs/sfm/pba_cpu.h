@@ -36,27 +36,26 @@ SFM_NAMESPACE_BEGIN
 #define VECTOR_ALIGNMENT_MASK (VECTOR_ALIGNMENT - 1)
 #define ALIGN_PTR(p)	  (( ((size_t) p) + VECTOR_ALIGNMENT_MASK)  & (~VECTOR_ALIGNMENT_MASK))
 
-template<class Float>
-struct avec : public std::vector<Float, util::AlignedAllocator<Float, VECTOR_ALIGNMENT> > {
-    avec<Float>() { }
-    avec<Float>(std::size_t sz) : std::vector<Float, util::AlignedAllocator<Float, VECTOR_ALIGNMENT> >(sz) { }
+struct avec : public std::vector<double, util::AlignedAllocator<double, VECTOR_ALIGNMENT> > {
+    avec() { }
+    avec(std::size_t sz) : std::vector<double, util::AlignedAllocator<double, VECTOR_ALIGNMENT> >(sz) { }
 
-    Float *begin() { return &this->front(); }
-    Float *end() { return &this->back() + 1; }
+    double *begin() { return &this->front(); }
+    double *end() { return &this->back() + 1; }
 
-    const Float *begin() const { return &this->front(); }
-    const Float *end() const { return &this->back() + 1; }
+    const double *begin() const { return &this->front(); }
+    const double *end() const { return &this->back() + 1; }
 
-    operator Float *() { return &this->front(); }
-    operator const Float *() const { return &this->front(); }
+    operator double *() { return &this->front(); }
+    operator const double *() const { return &this->front(); }
 
-    void set(Float* start, size_t n) { this->assign(start, start + n); }
+    void set(double* start, size_t n) { this->assign(start, start + n); }
 };
 
 class SparseBundleCPU : protected ConfigBA
 {
 public:
-    typedef avec<double>   VectorF;
+    typedef avec   VectorF;
     typedef std::vector<int>   VectorI;
 
 protected:      //cpu data
