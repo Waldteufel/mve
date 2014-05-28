@@ -1253,7 +1253,7 @@ namespace ProgramCPU
             JacobianOne(c, pt, ms, jxc, jyc, jxp, jyp, intrinsic_fixed, radial_distortion);
 
             ///////////////////////////////////////////////////////////
-            if(mode != 2)
+            if(mode != BUNDLE_ONLY_STRUCTURE)
             {
                 if(sjc0)
                 {
@@ -1266,7 +1266,7 @@ namespace ProgramCPU
                 AddBlockJtJ(jyc, bc, vn);
             }
 
-            if(mode != 1)
+            if(mode != BUNDLE_ONLY_MOTION)
             {
                 if(sjp0)
                 {
@@ -1287,7 +1287,7 @@ namespace ProgramCPU
         }
 
         ///invert the camera part
-        if(mode != 2)
+        if(mode != BUNDLE_ONLY_STRUCTURE)
         {
             /////////////////////////////////////////
             const Float* qw =  qwv.begin();
@@ -1337,7 +1337,7 @@ namespace ProgramCPU
 
         ///////////////////////////////////////////
         //inverting the point part
-        if(mode != 1)
+        if(mode != BUNDLE_ONLY_MOTION)
         {
             for(size_t i = 0; i < npts; ++i, bo += 6, bi += 6, di += POINT_ALIGN)
             {
@@ -1396,12 +1396,12 @@ namespace ProgramCPU
 
     template<class Float>
     void MultiplyBlockConditioner(int ncam, int npoint, Float* const blocksv,
-                                  Float* const vec, Float* resultv, int radial, int mode,  int mt1, int mt2)
+                                  Float* const vec, Float* resultv, int radial, BundleModeT mode,  int mt1, int mt2)
     {
         const int vn = radial ? 8 : 7;
-        if(mode != 2) MultiplyBlockConditionerC(ncam, blocksv, vec, resultv, vn, mt1);
+        if(mode != BUNDLE_ONLY_STRUCTURE) MultiplyBlockConditionerC(ncam, blocksv, vec, resultv, vn, mt1);
         if(mt2 == 0) mt2 = AUTO_MT_NUM(npoint * 24);
-        if(mode != 1) MultiplyBlockConditionerP(npoint,  blocksv + (vn*8*ncam), vec + ncam*8, resultv + 8*ncam, mt2);
+        if(mode != BUNDLE_ONLY_MOTION) MultiplyBlockConditionerP(npoint,  blocksv + (vn*8*ncam), vec + ncam*8, resultv + 8*ncam, mt2);
     }
 
     ////////////////////////////////////////////////////
@@ -1409,18 +1409,18 @@ namespace ProgramCPU
     // Forward declare.
     template<class Float>
     void ComputeJX( size_t nproj, size_t ncam,  const Float* x, const Float*  jc,
-                    const Float* jp, const int* jmap, Float* jx, int mode, int mt = 2);
+                    const Float* jp, const int* jmap, Float* jx, BundleModeT mode, int mt = 2);
 
 
     DEFINE_THREAD_DATA(ComputeJX)
-        size_t nproj, ncam; const Float* xc, *jc,* jp; const int* jmap; Float* jx; int mode;
+        size_t nproj, ncam; const Float* xc, *jc,* jp; const int* jmap; Float* jx; BundleModeT mode;
     BEGIN_THREAD_PROC(ComputeJX)
         ComputeJX(q->nproj, q->ncam, q->xc, q->jc, q->jp, q->jmap, q->jx, q->mode, 0);
     END_THREAD_RPOC(ComputeJX)
 
     template<class Float>
     void ComputeJX( size_t nproj, size_t ncam,  const Float* x, const Float*  jc,
-                    const Float* jp, const int* jmap, Float* jx, int mode, int mt = 2)
+                    const Float* jp, const int* jmap, Float* jx, BundleModeT mode, int mt = 2)
     {
         if(mt > 1 && nproj >= static_cast<std::size_t>(mt))
         {
@@ -1436,7 +1436,7 @@ namespace ProgramCPU
                             jmap + first *2, jx + first* 2, mode);
             }
             WAIT_THREAD(threads, thread_num);
-        }else if(mode == 0)
+        }else if(mode == BUNDLE_FULL)
         {
             const Float* pxc = x, * pxp = pxc + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
@@ -1444,7 +1444,7 @@ namespace ProgramCPU
             {
                 ComputeTwoJX(jc, jp, pxc + jmap[0] * 8, pxp + jmap[1] * POINT_ALIGN, jx);
             }
-        }else if(mode == 1)
+        }else if(mode == BUNDLE_ONLY_MOTION)
         {
             const Float* pxc = x;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
@@ -1454,7 +1454,7 @@ namespace ProgramCPU
                 jx[0] = DotProduct8(jc, xc)   ;
                 jx[1] = DotProduct8(jc + 8, xc);
             }
-        }else if(mode == 2)
+        }else if(mode == BUNDLE_ONLY_STRUCTURE)
         {
             const Float* pxp = x + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
@@ -1471,12 +1471,12 @@ namespace ProgramCPU
     template<class Float>
     void ComputeJX_(size_t nproj, size_t ncam,  const Float* x, Float* jx, const Float* camera,
                     const Float* point,  const Float* ms, const Float* sj, const int*  jmap,
-                    bool intrinsic_fixed, int radial_distortion, int mode, int mt = 16);
+                    bool intrinsic_fixed, int radial_distortion, BundleModeT mode, int mt = 16);
 
     DEFINE_THREAD_DATA(ComputeJX_)
            size_t nproj, ncam; const Float* x; Float * jx;
             const Float* camera, *point,* ms, *sj; const int *jmap;
-            bool intrinsic_fixed; int radial_distortion; int mode;
+            bool intrinsic_fixed; int radial_distortion; BundleModeT mode;
     BEGIN_THREAD_PROC(ComputeJX_)
         ComputeJX_( q->nproj, q->ncam, q->x, q->jx, q->camera, q->point, q->ms, q->sj,
                     q->jmap, q->intrinsic_fixed, q->radial_distortion, q->mode, 0);
@@ -1485,7 +1485,7 @@ namespace ProgramCPU
     template<class Float>
     void ComputeJX_(size_t nproj, size_t ncam,  const Float* x, Float* jx, const Float* camera,
                     const Float* point,  const Float* ms, const Float* sj, const int*  jmap,
-                    bool intrinsic_fixed, int radial_distortion, int mode, int mt = 16)
+                    bool intrinsic_fixed, int radial_distortion, BundleModeT mode, int mt = 16)
     {
         if(mt > 1 && nproj >= static_cast<std::size_t>(mt))
         {
@@ -1502,7 +1502,7 @@ namespace ProgramCPU
                     intrinsic_fixed, radial_distortion, mode);
             }
             WAIT_THREAD(threads, thread_num);
-        }else if(mode == 0)
+        }else if(mode == BUNDLE_FULL)
         {
             Float jcv[24 + 8]; //size_t offset = ((size_t) jcv) & 0xf;
             //Float* jc = jcv + (16 - offset) / sizeof(Float), *jp = jc + 16;
@@ -1529,7 +1529,7 @@ namespace ProgramCPU
                 ////////////////////////////////////
                 ComputeTwoJX(jc, jp, xc0 + cidx * 8, xp0 + pidx * POINT_ALIGN, jx);
             }
-        }else if(mode == 1)
+        }else if(mode == BUNDLE_ONLY_MOTION)
         {
             Float jcv[24 + 8]; //size_t offset = ((size_t) jcv) & 0xf;
             //Float* jc = jcv + (16 - offset) / sizeof(Float);
@@ -1550,7 +1550,7 @@ namespace ProgramCPU
                 jx[0] = DotProduct8(jc, xc)   ;
                 jx[1] = DotProduct8(jc + 8, xc);
             }
-        }else if(mode == 2)
+        }else if(mode == BUNDLE_ONLY_STRUCTURE)
         {
             Float jp[8];
 
@@ -1628,7 +1628,7 @@ namespace ProgramCPU
     template<class Float>
     void ComputeJtE(    size_t ncam, size_t npt, const Float* pe, const Float* jc,
                         const int* cmap, const int* cmlist,  const Float* jp,
-                        const int* pmap, Float* v, bool jc_transpose, int mode, int mt1, int mt2)
+                        const int* pmap, Float* v, bool jc_transpose, BundleModeT mode, int mt1, int mt2)
     {
         if(mode != 2)
         {
@@ -1674,7 +1674,7 @@ namespace ProgramCPU
     void ComputeJtE_(   size_t /*nproj*/, size_t ncam, size_t npt, const Float* ee,  Float* jte,
                         const Float* camera, const Float* point, const Float* ms, const int* jmap,
                         const int* cmap, const int* cmlist, const int* pmap, const Float* jp,
-                        bool intrinsic_fixed, int radial_distortion, int mode, int mt)
+                        bool intrinsic_fixed, int radial_distortion, BundleModeT mode, int mt)
     {
         if(mode != 2)
         {
@@ -1690,7 +1690,7 @@ namespace ProgramCPU
     template<class Float>
     void ComputeJtE_(   size_t nproj, size_t ncam, size_t npt, const Float* ee,  Float* jte,
                         const Float* camera, const Float* point, const Float* ms, const int* jmap,
-                        bool intrinsic_fixed, int radial_distortion, int mode)
+                        bool intrinsic_fixed, int radial_distortion, BundleModeT mode)
     {
         SetVectorZero(jte, jte + (ncam * 8 + npt * POINT_ALIGN));
         Float jcv[24 + 8];  //size_t offset = ((size_t) jcv) & 0xf;
@@ -1704,7 +1704,7 @@ namespace ProgramCPU
             int cidx = jmap[0], pidx = jmap[1];
             const Float* c = camera + cidx * 16, * pt = point + pidx * POINT_ALIGN;
 
-            if(mode == 0)
+            if(mode == BUNDLE_FULL)
             {
                 /////////////////////////////////////////////////////
                 JacobianOne(c, pt, ms, jc, jc + 8, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
@@ -1716,7 +1716,7 @@ namespace ProgramCPU
                 vp[0] += (ee[0] * pj[0] + ee[1] * pj[POINT_ALIGN]);
                 vp[1] += (ee[0] * pj[1] + ee[1] * pj[POINT_ALIGN + 1]);
                 vp[2] += (ee[0] * pj[2] + ee[1] * pj[POINT_ALIGN + 2]);
-            }else if(mode == 1)
+            }else if(mode == BUNDLE_ONLY_MOTION)
             {
                 /////////////////////////////////////////////////////
                 JacobianOne(c, pt, ms, jc, jc + 8, (Float*) NULL, (Float*) NULL, intrinsic_fixed, radial_distortion);
@@ -1725,7 +1725,7 @@ namespace ProgramCPU
                 Float* vc = vc0 + cidx * 8;
                 AddScaledVec8(ee[0], jc,     vc);
                 AddScaledVec8(ee[1], jc + 8, vc);
-            }else
+            }else if(mode == BUNDLE_ONLY_STRUCTURE)
             {
                /////////////////////////////////////////////////////
                 JacobianOne(c, pt, ms, (Float*) NULL, (Float*) NULL, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
