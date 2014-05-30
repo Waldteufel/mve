@@ -1,3 +1,28 @@
+#include <immintrin.h>
+
+#if defined(__AVX__)
+inline double hsum(__m256d value)
+{
+    double res;
+    _mm256_store1_pd(&res, _mm256_hadd_pd(value, value));
+    return res;
+}
+#elif defined(__SSE3__)
+inline double hsum(__m128d value)
+{
+    double res;
+    _mm_store1_pd(&res, _mm_hadd_pd(value, value));
+    return res;
+}
+#elif defined(__SSE2__)
+inline double hsum(__m128d value)
+{
+    double res;
+    _mm_store1_pd(&res, _mm_add_pd(value, _mm_shuffle_pd(value, value, _MM_SHUFFLE2(0, 1))));
+    return res;
+}
+#endif
+
 #ifdef CPUPBA_USE_SSE
 #define CPUPBA_USE_SIMD
 namespace MYSSE

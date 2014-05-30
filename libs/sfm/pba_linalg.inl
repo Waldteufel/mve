@@ -1,120 +1,168 @@
+#include <immintrin.h>
+
 namespace ProgramCPU
 {
     int		__num_cpu_cores = 0;
-    template <class Float>   double ComputeVectorNorm(const avec& vec, int mt = 0);
 
-#if defined(CPUPBA_USE_SIMD)
-    template <class Float>
     void ComputeSQRT(avec& vec)
     {
-#ifndef SIMD_NO_SQRT
-        const size_t step =sse_step<Float>();
-        Float * p = &vec[0], * pe = p + vec.size(), *pex = pe - step;
-        for(; p <= pex; p += step)   sse_store(p, sse_sqrt(sse_load(p)));
-        for(; p < pe; ++p) p[0] = sqrt(p[0]);
+        for (std::size_t i = 0; i < vec.size(); ++i)
+            vec[i] = std::sqrt(vec[i]);
+    }
+
+    void ComputeRSQRT(avec& vec)
+    {
+#if defined(__AVX__)
+#pragma omp parallel for
+        for (std::size_t i = 0; i < vec.size(); i += 4)
+            _mm256_store_pd(&vec[i], _mm256_div_pd(_mm256_set1_pd(1.0), _mm256_sqrt_pd(_mm256_load_pd(&vec[i]))));
+#elif defined(__SSE2__)
+#pragma omp parallel for
+        for (std::size_t i = 0; i < vec.size(); i += 2)
+            _mm_store_pd(&vec[i], _mm_div_pd(_mm_set1_pd(1.0), _mm_sqrt_pd(_mm_load_pd(&vec[i]))));
 #else
-        for(Float* it = vec.begin(); it < vec.end(); ++it)   *it  = sqrt(*it);
+#pragma omp parallel for
+        for (std::size_t i = 0; i < vec.size(); ++i)
+            vec[i] = 1.0/std::sqrt(vec[i]);
 #endif
     }
 
-    template <class Float>
-    void ComputeRSQRT(avec& vec)
+    double ComputeVectorNorm(const avec& vec)
     {
-        Float * p = &vec[0], * pe = p + vec.size();
-        for(; p < pe; ++p) p[0] = (p[0] == 0? 0 : Float(1.0) / p[0]);
-        ComputeSQRT(vec);
+#if defined(__AVX__)
+        __m256d sum = _mm256_setzero_pd();
+#pragma omp parallel
+        {
+            __m256d local_sum = _mm256_setzero_pd();
+            for (std::size_t i = 0; i < vec.size(); i += 2)
+            {
+                __m256d elem = _mm256_load_pd(&vec[i]);
+                local_sum = _mm256_add_pd(local_sum, _mm256_mul_pd(elem, elem));
+            }
+
+#pragma omp critical
+            sum += local_sum;
+        }
+        return hsum(sum);
+#elif defined(__SSE2__)
+        __m128d sum = _mm_setzero_pd();
+#pragma omp parallel
+        {
+            __m128d local_sum = _mm_setzero_pd();
+            for (std::size_t i = 0; i < vec.size(); i += 2)
+            {
+                __m128d elem = _mm_load_pd(&vec[i]);
+                local_sum = _mm_add_pd(local_sum, _mm_mul_pd(elem, elem));
+            }
+
+#pragma omp critical
+            sum += local_sum;
+        }
+        return hsum(sum);
+#else
+        double result = 0.0;
+#pragma omp parallel for reduction(result:+)
+        for (std::size_t i = 0; i < vec.size(); ++i)
+            result += vec[i] * vec[i];
+        return result;
+#endif
     }
 
-    template<class Float>
-    void SetVectorZero(Float* p, Float * pe)
-    {
-         SSE_T sse = SSE_ZERO;
-         const size_t step =sse_step<Float>();
-         Float * pex = pe - step;
-         for(; p <= pex; p += step) sse_store(p, sse);
-         for(; p < pe; ++p) *p = 0;
-    }
-
-    template<class Float>
-    void SetVectorZero(avec& vec)
-    {
-         Float * p = &vec[0], * pe = p + vec.size();
-         SetVectorZero(p, pe);
-    }
-
-    //function not used
-    template<class Float>
-    inline void MemoryCopyA(const Float* p, const Float* pe, Float* d)
-    {
-        const size_t step = sse_step<Float>();
-        const Float* pex = pe - step;
-        for(; p <= pex; p += step, d += step) sse_store(d, sse_load(p));
-        //while(p < pe) *d++ = *p++;
-    }
-
-    template <class Float>
-    void ComputeVectorNorm(const Float* p, const Float* pe, double* psum)
-    {
-         SSE_T sse = SSE_ZERO;
-         const size_t step =sse_step<Float>();
-         const Float * pex = pe - step;
-         for(; p <= pex; p += step)
-         {
-             SSE_T ps = sse_load(p);
-             sse = sse_add(sse, sse_mul(ps, ps));
-         }
-         double sum = sse_sum(sse);
-         for(; p < pe; ++p) sum += p[0] * p[0];
-        *psum = sum;
-    }
-
-    template<class Float>
     double ComputeVectorNormW(const avec& vec, const avec& weight)
     {
-        if(weight.begin() != NULL)
+        if (weight.empty())
+            return ComputeVectorNorm(vec);
+
+#if defined(__AVX__)
+        __m256d sum = _mm256_setzero_pd();
+#pragma omp parallel
         {
-             SSE_T sse = SSE_ZERO;
-             const size_t step =sse_step<Float>();
-             const Float * p = vec, * pe = p + vec.size(), *pex = pe - step;
-             const Float * w = weight;
-             for(; p <= pex; p += step, w+= step)
-             {
-                 SSE_T pw = sse_load(w), ps = sse_load(p);
-                 sse = sse_add(sse, sse_mul(sse_mul(ps, pw), ps));
-             }
-             double sum = sse_sum(sse);
-             for(; p < pe; ++p, ++w) sum += p[0] * w[0] * p[0];
-             return sum;
-        }else
-        {
-            return ComputeVectorNorm<Float>(vec, 0);
+            __m256d local_sum = _mm256_setzero_pd();
+            for (std::size_t i = 0; i < vec.size(); i += 2)
+            {
+                __m256d elem = _mm256_load_pd(&vec[i]);
+                __m256d w = _mm256_load_pd(&weight[i]);
+                local_sum = _mm256_add_pd(local_sum, _mm256_mul_pd(_mm256_mul_pd(elem, w), elem));
+            }
+
+#pragma omp critical
+            sum += local_sum;
         }
+        return hsum(sum);
+#elif defined(__SSE2__)
+        __m128d sum = _mm_setzero_pd();
+#pragma omp parallel
+        {
+            __m128d local_sum = _mm_setzero_pd();
+            for (std::size_t i = 0; i < vec.size(); i += 2)
+            {
+                __m128d elem = _mm_load_pd(&vec[i]);
+                __m128d w = _mm_load_pd(&weight[i]);
+                local_sum = _mm_add_pd(local_sum, _mm_mul_pd(_mm_mul_pd(elem, w), elem));
+            }
+
+#pragma omp critical
+            sum += local_sum;
+        }
+        return hsum(sum);
+#else
+        double result = 0.0;
+#pragma omp parallel for reduction(result:+)
+        for (std::size_t i = 0; i < vec.size(); ++i)
+            result += vec[i] * weight[i] * vec[i];
+        return result;
+#endif
     }
 
-    template<class Float>
-    double ComputeVectorDot(const avec& vec1, const avec& vec2)
+    double ComputeVectorDot(const avec& veca, const avec& vecb)
     {
-         SSE_T sse = SSE_ZERO;
-         const size_t step =sse_step<Float>();
-         const Float * p1 = vec1, * pe = p1 + vec1.size(), *pex = pe - step;
-         const Float * p2 = vec2;
-         for(; p1 <= pex; p1 += step, p2+= step)
-         {
-             SSE_T ps1 = sse_load(p1), ps2 = sse_load(p2);
-             sse = sse_add(sse, sse_mul(ps1, ps2));
-         }
-         double sum = sse_sum(sse);
-         for(; p1 < pe; ++p1, ++p2) sum += p1[0]* p2[0];
-         return sum;
+#if defined(__AVX__)
+        __m256d sum = _mm256_setzero_pd();
+#pragma omp parallel
+        {
+            __m256d local_sum = _mm256_setzero_pd();
+            for (std::size_t i = 0; i < veca.size(); i += 2)
+            {
+                __m256d a = _mm256_load_pd(&veca[i]);
+                __m256d b = _mm256_load_pd(&vecb[i]);
+                local_sum = _mm256_add_pd(local_sum, _mm256_mul_pd(a, b));
+            }
+
+#pragma omp critical
+            sum += local_sum;
+        }
+        return hsum(sum);
+#elif defined(__SSE2__)
+        __m128d sum = _mm_setzero_pd();
+#pragma omp parallel
+        {
+            __m128d local_sum = _mm_setzero_pd();
+            for (std::size_t i = 0; i < veca.size(); i += 2)
+            {
+                __m128d a = _mm_load_pd(&veca[i]);
+                __m128d b = _mm_load_pd(&vecb[i]);
+                local_sum = _mm_add_pd(local_sum, _mm_mul_pd(a, b));
+            }
+
+#pragma omp critical
+            sum += local_sum;
+        }
+        return hsum(sum);
+#else
+        double result = 0.0;
+#pragma omp parallel for reduction(result:+)
+        for (std::size_t i = 0; i < veca.size(); ++i)
+            result += veca[i] * vecb[i];
+        return result;
+#endif
     }
 
-    template<class Float>
     void   ComputeVXY(const avec& vec1, const avec& vec2, avec& result, size_t part = 0, size_t skip = 0)
     {
-        const size_t step =sse_step<Float>();
-        const Float * p1 = vec1 + skip, * pe = p1 + (part ? part : vec1.size()), * pex = pe - step;
-        const Float * p2 = vec2 + skip;
-        Float * p3 = result + skip;
+        const size_t step = sse_step<double>();
+        const double *p1 = vec1 + skip, *pe = p1 + (part ? part : vec1.size()), *pex = pe - step;
+        const double *p2 = vec2 + skip;
+        double *p3 = result + skip;
         for(; p1 <= pex; p1 += step, p2 += step, p3 += step)
         {
             SSE_T  ps1 = sse_load(p1), ps2 = sse_load(p2);
@@ -181,129 +229,6 @@ namespace ProgramCPU
         }
         for(; p4 < pe; ++p1, ++p2, ++p3, ++ p4) p4[0] = a * p1[0] * p2[0] + p3[0];
     }
-
-#else
-    template <class Float>
-    void ComputeSQRT(avec& vec)
-    {
-        Float* it = vec.begin();
-        for(; it < vec.end(); ++it)
-        {
-            *it  = std::sqrt(*it);
-        }
-    }
-    template <class Float>
-    void ComputeRSQRT(avec& vec)
-    {
-        Float* it = vec.begin();
-        for(; it < vec.end(); ++it)
-        {
-            *it  = (*it == 0 ? 0 : Float(1.0) / std::sqrt(*it));
-        }
-    }
-    template <class Float>
-    inline void SetVectorZero(Float* p,Float* pe)  { std::fill(p, pe, 0);                     }
-    template <class Float>
-    inline void SetVectorZero(avec& vec)    { std::fill(vec.begin(), vec.end(), 0);    }
-
-    template <class Float>
-    double ComputeVectorNormW(const avec& vec, const avec& weight)
-    {
-        double sum = 0;
-        const Float*  it1 = vec.begin(), * it2 = weight.begin();
-        for(; it1 < vec.end(); ++it1, ++it2)
-        {
-            sum += (*it1) * (*it2) * (*it1);
-        }
-        return sum;
-    }
-
-    template <class Float>
-    double ComputeVectorDot(const avec& vec1, const avec& vec2)
-    {
-        double sum = 0;
-        const Float*   it1 = vec1.begin(), *it2 = vec2.begin();
-        for(; it1 < vec1.end(); ++it1, ++it2)
-        {
-            sum += (*it1) * (*it2);
-        }
-        return sum;
-    }
-    template <class Float>
-    void ComputeVectorNorm(const Float* p, const Float* pe, double* psum)
-    {
-        double sum = 0;
-        for(; p < pe; ++p)  sum += (*p) * (*p);
-        *psum = sum;
-    }
-    template <class Float>
-    inline void   ComputeVXY(const avec& vec1, const avec& vec2, avec& result, size_t part =0, size_t skip = 0)
-    {
-        const Float*  it1 = vec1.begin() + skip, *it2 = vec2.begin() + skip;
-        const Float*  ite = part ? (it1 + part) : vec1.end();
-        Float* it3 = result.begin() + skip;
-        for(; it1 < ite; ++it1, ++it2, ++it3)
-        {
-             (*it3) = (*it1) * (*it2);
-        }
-    }
-    template <class Float>
-    void   ScaleJ8(Float* jcx, Float* jcy, const Float* sj)
-    {
-        for(int i = 0; i < 8; ++i) {jcx[i] *= sj[i]; jcy[i] *= sj[i]; }
-    }
-
-    template <class Float>
-    inline void AddScaledVec8(Float a, const Float* x, Float* v)
-    {
-        for(int i = 0; i < 8; ++i) v[i] += (a * x[i]);
-    }
-
-
-    template <class Float>
-    void   ComputeSAX(Float a, const avec& vec1, avec& result)
-    {
-        const Float*  it1 = vec1.begin();
-        Float* it3 = result.begin();
-        for(;  it1 < vec1.end(); ++it1,  ++it3)
-        {
-             (*it3) = (a * (*it1));
-        }
-    }
-
-    template <class Float>
-    inline void   ComputeSXYPZ(Float a, const Float* p1, const Float* p2, const Float* p3, Float* p4, Float* pe)
-    {
-        for(; p4 < pe; ++p1, ++p2, ++p3, ++p4) *p4 = (a * (*p1) * (*p2) + (*p3));
-    }
-
-    template <class Float>
-    void   ComputeSAXPY(Float a, const Float* it1, const Float* it2, Float* it3, Float* ite)
-    {
-        if(a == (Float)1.0)
-        {
-            for( ; it3 < ite; ++it1, ++it2, ++it3)
-            {
-                 (*it3) = ((*it1) + (*it2));
-            }
-        }else
-        {
-            for( ; it3 < ite; ++it1, ++it2, ++it3)
-            {
-                 (*it3) = (a * (*it1) + (*it2));
-            }
-        }
-    }
-    template<class Float>
-    void AddBlockJtJ(const Float * jc, Float * block, int vn)
-    {
-        for(int i = 0; i < vn; ++i)
-        {
-            Float* row = block + i * 8,  a = jc[i];
-            for(int j = 0; j < vn; ++j) row[j] += a * jc[j];
-        }
-    }
-#endif
 
 #ifdef _WIN32
 #define DEFINE_THREAD_DATA(X)       template<class Float> struct X##_STRUCT {
@@ -471,15 +396,15 @@ namespace ProgramCPU
         m[7]=Float(r[1]*r[2]*ct + r[0]*st);
         m[8]=Float(1.0 - (r[0]*r[0] + r[1]*r[1])*ct );
     }
-    template<class Float>
+
     void UpdateCamera(int ncam, const avec& camera, const avec& delta, avec& new_camera)
     {
-        const Float * c = &camera[0], * d = &delta[0];
-        Float * nc = &new_camera[0], m[9];
+        const double *c = &camera[0], *d = &delta[0];
+        double *nc = &new_camera[0], m[9];
         //f[1], t[3], r[3][3], d[1]
         for(int i = 0; i < ncam; ++i, c += 16, d += 8, nc += 16)
         {
-            nc[0]  = std::max(c[0] + d[0], ((Float)1e-10));
+            nc[0]  = std::max(c[0] + d[0], 1.0e-10);
             nc[1]  = c[1] + d[1];
             nc[2]  = c[2] + d[2];
             nc[3]  = c[3] + d[3];
@@ -900,7 +825,7 @@ namespace ProgramCPU
 
         size_t ncam = cmapv.size() - 1, npts = pmapv.size() - 1;
         const int vn = radial? 8 : 7;
-        SetVectorZero(jtjdi);
+        std::fill(jtjdi.begin(), jtjdi.end(), 0.0);
 
         const int* cmap = &cmapv[0];
         const int * pmap = &pmapv[0];
@@ -1221,8 +1146,8 @@ namespace ProgramCPU
         size_t sz_jcd = ncam * 8;
         size_t sz_jcb = ncam * szbc;
         avec blockpv(blocks.size());
-        SetVectorZero(blockpv);
-        SetVectorZero(diag);
+        std::fill(blockpv.begin(), blockpv.end(), 0.0);
+        std::fill(diag.begin(), diag.end(), 0.0);
         //////////////////////////////////////////////////////
         float lambda1 = dampd? 0.0f : lambda;
         float lambda2 = dampd? (1.0f + lambda) : 1.0f;
