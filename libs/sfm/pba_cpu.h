@@ -21,14 +21,6 @@
 #include "sfm/pba_config.h"
 #include "sfm/pba_types.h"
 
-//BYTE-ALIGNMENT for data allocation (16 required for SSE, 32 required for AVX)
-//PREVIOUS version uses only SSE. The new version will include AVX.
-//SO the alignment is increased from 16 to 32
-#define VECTOR_ALIGNMENT 32
-#define FLOAT_ALIGN      8
-#define VECTOR_ALIGNMENT_MASK (VECTOR_ALIGNMENT - 1)
-#define ALIGN_PTR(p)	  (( ((size_t) p) + VECTOR_ALIGNMENT_MASK)  & (~VECTOR_ALIGNMENT_MASK))
-
 SFM_NAMESPACE_BEGIN
 SFM_PBA_NAMESPACE_BEGIN
 

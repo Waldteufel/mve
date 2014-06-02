@@ -26,61 +26,23 @@
 #include <ctime>
 #include <cfloat>
 
+#include <omp.h>
+
 #include "util/exception.h"
 #include "sfm/pba_cpu.h"
 
-#if defined(WINAPI_FAMILY) && WINAPI_FAMILY==WINAPI_FAMILY_APP
-#include <thread>
-#endif
-
-//#define POINT_DATA_ALIGN4
-#if defined(__arm__) || defined(_M_ARM)
-    #undef CPUPBA_USE_SSE
-    #undef CPUPBA_USE_AVX
-    #undef POINT_DATA_ALIGN4
-    #if defined(_M_ARM) && _M_ARM >=7 && !defined (DISABLE_CPU_NEON)
-        #include <arm_neon.h>
-        #define CPUPBA_USE_NEON
-    #elif defined(__ARM_NEON__)  && !defined (DISABLE_CPU_NEON)
-        #include <arm_neon.h>
-        #define CPUPBA_USE_NEON
-    #endif
-#elif defined(CPUPBA_USE_AVX)// Using AVX
-    #include <immintrin.h>
-    #undef CPUPBA_USE_SSE
-    #undef POINT_DATA_ALIGN4
-#elif !defined(DISABLE_CPU_SSE)// Using SSE
-    #define CPUPBA_USE_SSE
-    #include <xmmintrin.h>
-    #include <emmintrin.h>
-#endif
-
-#ifdef POINT_DATA_ALIGN4
-#define POINT_ALIGN 4
-#else
-#define POINT_ALIGN 3
-#endif
-
-#define POINT_ALIGN2 (POINT_ALIGN * 2)
-
-#ifdef _WIN32
-    #define NOMINMAX
-    #include <windows.h>
-    #define INLINESUFIX
-    #define finite _finite
-#else
-    #include <pthread.h>
-    #include <sched.h>
-    #include <unistd.h>
-#endif
-
-//maximum thread count
-#define THREAD_NUM_MAX 64
-//compute the number of threads for vector operatoins, pure heuristics...
-#define AUTO_MT_NUM(sz) int((log((double) sz) / log(2.0) - 18.5 ) * __num_cpu_cores / 16.0)
+#include <immintrin.h>
 
 SFM_NAMESPACE_BEGIN
 SFM_PBA_NAMESPACE_BEGIN
+
+#define THREAD_NUM_MAX 64
+
+#define POINT_ALIGN 3
+#define POINT_ALIGN2 6
+
+#define ALIGN_PTR(x) (x)
+#define AUTO_MT_NUM(x) 0
 
 void avec::SaveToFile(const char* name)
 {
@@ -88,757 +50,131 @@ void avec::SaveToFile(const char* name)
     for(double* p = begin(); p < end(); ++p) out << (*p) <<  '\n';
 }
 
-#ifdef CPUPBA_USE_SSE
-#define CPUPBA_USE_SIMD
-namespace MYSSE
-{
-    template<class Float> class SSE{};
-    template<>  class SSE<float>  {
-        public: typedef  __m128 sse_type;
-        static inline sse_type zero() {return _mm_setzero_ps();}    };
-    template<>  class SSE<double> {
-        public: typedef  __m128d sse_type;
-        static inline sse_type zero() {return _mm_setzero_pd();}    };
-
-    ////////////////////////////////////////////
-    template <class Float> inline size_t sse_step()    {return 16 / sizeof(Float); }
-    inline __m128 sse_load1(const float* p)     {return _mm_load1_ps(p);}
-    inline __m128 sse_load(const float* p)      {return _mm_load_ps(p);}
-    inline __m128 sse_add(__m128 s1, __m128 s2)     {return _mm_add_ps(s1, s2);}
-    inline __m128 sse_sub(__m128 s1, __m128 s2)     {return _mm_sub_ps(s1, s2);}
-    inline __m128 sse_mul(__m128 s1, __m128 s2)     {return _mm_mul_ps(s1, s2);}
-    inline __m128 sse_sqrt(__m128 s)                {return _mm_sqrt_ps(s); }
-
-    inline __m128d sse_load1(const double* p)       {return _mm_load1_pd(p);}
-    inline __m128d sse_load(const double* p)        {return _mm_load_pd(p);}
-    inline __m128d sse_add(__m128d s1, __m128d s2)      {return _mm_add_pd(s1, s2);}
-    inline __m128d sse_sub(__m128d s1, __m128d s2)      {return _mm_sub_pd(s1, s2);}
-    inline __m128d sse_mul(__m128d s1, __m128d s2)      {return _mm_mul_pd(s1, s2);}
-    inline __m128d sse_sqrt(__m128d s)                  {return _mm_sqrt_pd(s); }
-
-#ifdef _WIN32
-    inline float    sse_sum(__m128 s)    {return (s.m128_f32[0]+ s.m128_f32[2])  + (s.m128_f32[1] +s.m128_f32[3]);}
-    inline double   sse_sum(__m128d s)    {return s.m128d_f64[0] + s.m128d_f64[1];}
-#else
-    inline float    sse_sum(__m128 s)    {float *f = (float*) (&s); return (f[0] + f[2]) + (f[1] + f[3]);}
-    inline double   sse_sum(__m128d s)   {double *d = (double*) (&s); return d[0] + d[1];}
-#endif
-    //inline float  sse_dot(__m128 s1, __m128 s2)	{__m128 temp = _mm_dp_ps(s1, s2, 0xF1);  	float* f = (float*) (&temp); return f[0]; 	}
-    //inline double  sse_dot(__m128d s1, __m128d s2)	{__m128d temp = _mm_dp_pd(s1, s2, 0x31);  	double* f = (double*) (&temp); return f[0] ; }
-    inline void    sse_store(float *p, __m128 s){_mm_store_ps(p, s); }
-    inline void    sse_store(double *p, __m128d s)  {_mm_store_pd(p, s); }
-
-    inline void data_prefetch(const void* p) {_mm_prefetch((const char*)p, _MM_HINT_NTA);}
-}
-
 namespace ProgramCPU
 {
-    using namespace MYSSE;
-    #define SSE_ZERO SSE<double>::zero()
-    #define SSE_T SSE<double>::sse_type
-    /////////////////////////////
-    inline void   ScaleJ4(float* jcx, float* jcy, const float* sj)
-    {
-         __m128 ps = _mm_load_ps(sj);
-        _mm_store_ps(jcx, _mm_mul_ps(_mm_load_ps(jcx), ps));
-        _mm_store_ps(jcy, _mm_mul_ps(_mm_load_ps(jcy), ps));
-    }
-    inline void   ScaleJ8(float* jcx, float* jcy, const float* sj)
-    {
-        ScaleJ4(jcx, jcy, sj);
-        ScaleJ4(jcx + 4, jcy + 4, sj + 4);
-    }
-    inline void   ScaleJ4(double* jcx, double* jcy, const double* sj)
-    {
-         __m128d ps1 = _mm_load_pd(sj), ps2 = _mm_load_pd(sj + 2);
-        _mm_store_pd(jcx    , _mm_mul_pd(_mm_load_pd(jcx), ps1));
-        _mm_store_pd(jcy    , _mm_mul_pd(_mm_load_pd(jcy), ps1));
-        _mm_store_pd(jcx + 2, _mm_mul_pd(_mm_load_pd(jcx + 2), ps2));
-        _mm_store_pd(jcy + 2, _mm_mul_pd(_mm_load_pd(jcy + 2), ps2));
-    }
-    inline void   ScaleJ8(double* jcx, double* jcy, const double* sj)
-    {
-        ScaleJ4(jcx, jcy, sj);
-        ScaleJ4(jcx + 4, jcy + 4, sj + 4);
-    }
-    inline float   DotProduct8(const float* v1, const float* v2)
-    {
-        __m128 ds = _mm_add_ps(
-            _mm_mul_ps(_mm_load_ps(v1),     _mm_load_ps(v2)),
-            _mm_mul_ps(_mm_load_ps(v1 + 4), _mm_load_ps(v2 + 4)));
-        return sse_sum(ds);
-    }
-    inline double   DotProduct8(const double* v1, const double* v2)
-    {
-        __m128d d1 = _mm_mul_pd(_mm_load_pd(v1),     _mm_load_pd(v2)) ;
-        __m128d d2 = _mm_mul_pd(_mm_load_pd(v1 + 2), _mm_load_pd(v2 + 2));
-        __m128d d3 = _mm_mul_pd(_mm_load_pd(v1 + 4), _mm_load_pd(v2 + 4));
-        __m128d d4 = _mm_mul_pd(_mm_load_pd(v1 + 6), _mm_load_pd(v2 + 6));
-        __m128d ds = _mm_add_pd(_mm_add_pd(d1, d2),  _mm_add_pd(d3, d4));
-        return sse_sum(ds);
-    }
+    int __num_cpu_cores = 0;
 
-    inline void  ComputeTwoJX(const float* jc, const float* jp, const float* xc, const float* xp, float* jx)
-    {
-#ifdef POINT_DATA_ALIGN4
-        __m128 xc1 = _mm_load_ps(xc), xc2 = _mm_load_ps(xc + 4), mxp = _mm_load_ps(xp);
-        __m128 ds1 = _mm_add_ps(_mm_mul_ps(_mm_load_ps(jc),  xc1), _mm_mul_ps(_mm_load_ps(jc + 4), xc2));
-        __m128 dx1 = _mm_add_ps(ds1, _mm_mul_ps(_mm_load_ps(jp), mxp));
-        jx[0] = sse_sum(dx1);
-        __m128 ds2 = _mm_add_ps(_mm_mul_ps(_mm_load_ps(jc + 8), xc1), _mm_mul_ps(_mm_load_ps(jc + 12), xc2));
-        __m128 dx2 = _mm_add_ps(ds2, _mm_mul_ps(_mm_load_ps(jp + 4), mxp));
-        jx[1] = sse_sum(dx2);
-#else
-        __m128 xc1 = _mm_load_ps(xc),		xc2 = _mm_load_ps(xc + 4);
-        __m128 jc1 = _mm_load_ps(jc),       jc2 = _mm_load_ps(jc + 4);
-        __m128 jc3 = _mm_load_ps(jc + 8),   jc4 = _mm_load_ps(jc + 12);
-        __m128 ds1 = _mm_add_ps(_mm_mul_ps(jc1, xc1), _mm_mul_ps(jc2, xc2));
-        __m128 ds2 = _mm_add_ps(_mm_mul_ps(jc3, xc1), _mm_mul_ps(jc4, xc2));
-        jx[0] = sse_sum(ds1) + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-        jx[1] = sse_sum(ds2) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);
-        /*jx[0] = (sse_dot(jc1, xc1) + sse_dot(jc2, xc2)) + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-        jx[1] = (sse_dot(jc3, xc1) + sse_dot(jc4, xc2)) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);*/
-#endif
-    }
-
-    inline void ComputeTwoJX(const double* jc, const double* jp, const double* xc, const double* xp, double* jx)
-    {
-        __m128d xc1 = _mm_load_pd(xc), xc2 = _mm_load_pd(xc +2), xc3 = _mm_load_pd(xc + 4), xc4 = _mm_load_pd(xc + 6);
-        __m128d d1 = _mm_mul_pd(_mm_load_pd(jc),     xc1);
-        __m128d d2 = _mm_mul_pd(_mm_load_pd(jc + 2), xc2);
-        __m128d d3 = _mm_mul_pd(_mm_load_pd(jc + 4), xc3);
-        __m128d d4 = _mm_mul_pd(_mm_load_pd(jc + 6), xc4);
-        __m128d ds1 = _mm_add_pd(_mm_add_pd(d1, d2),  _mm_add_pd(d3, d4));
-        jx[0] = sse_sum(ds1)  + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-
-        __m128d d5 = _mm_mul_pd(_mm_load_pd(jc + 8 ), xc1);
-        __m128d d6 = _mm_mul_pd(_mm_load_pd(jc + 10), xc2);
-        __m128d d7 = _mm_mul_pd(_mm_load_pd(jc + 12), xc3);
-        __m128d d8 = _mm_mul_pd(_mm_load_pd(jc + 14), xc4);
-        __m128d ds2 = _mm_add_pd(_mm_add_pd(d5, d6),  _mm_add_pd(d7, d8));
-        jx[1] = sse_sum(ds2) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);
-    }
-
-    //v += ax
-    inline void   AddScaledVec8(float a, const float* x, float* v)
-    {
-        __m128 aa = sse_load1(&a);
-        _mm_store_ps(v  , _mm_add_ps( _mm_mul_ps(_mm_load_ps(x    ), aa), _mm_load_ps(v  )));
-        _mm_store_ps(v+4, _mm_add_ps( _mm_mul_ps(_mm_load_ps(x + 4), aa), _mm_load_ps(v+4)));
-    }
-    //v += ax
-    inline void   AddScaledVec8(double a, const double* x, double* v)
-    {
-        __m128d aa = sse_load1(&a);
-        _mm_store_pd(v  , _mm_add_pd( _mm_mul_pd(_mm_load_pd(x    ), aa), _mm_load_pd(v  )));
-        _mm_store_pd(v+2, _mm_add_pd( _mm_mul_pd(_mm_load_pd(x + 2), aa), _mm_load_pd(v+2)));
-        _mm_store_pd(v+4, _mm_add_pd( _mm_mul_pd(_mm_load_pd(x + 4), aa), _mm_load_pd(v+4)));
-        _mm_store_pd(v+6, _mm_add_pd( _mm_mul_pd(_mm_load_pd(x + 6), aa), _mm_load_pd(v+6)));
-    }
-
-    inline void AddBlockJtJ(const float * jc, float * block, int vn)
-    {
-        __m128 j1 = _mm_load_ps(jc);
-        __m128 j2 = _mm_load_ps(jc + 4);
-        for(int i = 0; i < vn; ++i, ++jc, block += 8)
-        {
-            __m128 a = sse_load1(jc);
-            _mm_store_ps(block + 0, _mm_add_ps(_mm_mul_ps(a, j1), _mm_load_ps(block + 0)));
-            _mm_store_ps(block + 4, _mm_add_ps(_mm_mul_ps(a, j2), _mm_load_ps(block + 4)));
-        }
-    }
-
-    inline void AddBlockJtJ(const double * jc, double * block, int vn)
-    {
-        __m128d j1 = _mm_load_pd(jc);
-        __m128d j2 = _mm_load_pd(jc + 2);
-        __m128d j3 = _mm_load_pd(jc + 4);
-        __m128d j4 = _mm_load_pd(jc + 6);
-        for(int i = 0; i < vn; ++i, ++jc, block += 8)
-        {
-            __m128d a = sse_load1(jc);
-            _mm_store_pd(block + 0, _mm_add_pd(_mm_mul_pd(a, j1), _mm_load_pd(block + 0)));
-            _mm_store_pd(block + 2, _mm_add_pd(_mm_mul_pd(a, j2), _mm_load_pd(block + 2)));
-            _mm_store_pd(block + 4, _mm_add_pd(_mm_mul_pd(a, j3), _mm_load_pd(block + 4)));
-            _mm_store_pd(block + 6, _mm_add_pd(_mm_mul_pd(a, j4), _mm_load_pd(block + 6)));
-        }
-    }
-}
-#endif
-
-#ifdef CPUPBA_USE_AVX
-#define CPUPBA_USE_SIMD
-namespace MYAVX
-{
-    template<class Float> class SSE{};
-    template<>  class SSE<float>  {
-        public: typedef  __m256 sse_type;   //static size_t   step() {return 4;}
-        static inline sse_type zero() {return _mm256_setzero_ps();}    };
-    template<>  class SSE<double> {
-        public: typedef  __m256d sse_type;  //static size_t   step() {return 2;}
-        static inline sse_type zero() {return _mm256_setzero_pd();}    };
-
-    ////////////////////////////////////////////
-    template <class Float> inline size_t sse_step()    {return 32 / sizeof(Float); };
-    inline __m256 sse_load1(const float* p)     {return _mm256_broadcast_ss(p);}
-    inline __m256 sse_load(const float* p)      {return _mm256_load_ps(p);}
-    inline __m256 sse_add(__m256 s1, __m256 s2)     {return _mm256_add_ps(s1, s2);}
-    inline __m256 sse_sub(__m256 s1, __m256 s2)     {return _mm256_sub_ps(s1, s2);}
-    inline __m256 sse_mul(__m256 s1, __m256 s2)     {return _mm256_mul_ps(s1, s2);}
-    inline __m256 sse_sqrt(__m256 s)                {return _mm256_sqrt_ps(s); }
-
-    //inline __m256 sse_fmad(__m256 a, __m256 b, __m256 c) {return _mm256_fmadd_ps(a, b, c);}
-
-    inline __m256d sse_load1(const double* p)       {return _mm256_broadcast_sd(p);}
-    inline __m256d sse_load(const double* p)        {return _mm256_load_pd(p);}
-    inline __m256d sse_add(__m256d s1, __m256d s2)      {return _mm256_add_pd(s1, s2);}
-    inline __m256d sse_sub(__m256d s1, __m256d s2)      {return _mm256_sub_pd(s1, s2);}
-    inline __m256d sse_mul(__m256d s1, __m256d s2)      {return _mm256_mul_pd(s1, s2);}
-    inline __m256d sse_sqrt(__m256d s)                  {return _mm256_sqrt_pd(s); }
-
-#ifdef _WIN32
-    inline float    sse_sum(__m256 s)    {return ((s.m256_f32[0]  + s.m256_f32[4]) + (s.m256_f32[2]+ s.m256_f32[6])) +
-                                                 ((s.m256_f32[1]  + s.m256_f32[5]) + (s.m256_f32[3] +s.m256_f32[7]));}
-    inline double   sse_sum(__m256d s)    {return (s.m256d_f64[0] + s.m256d_f64[2]) + (s.m256d_f64[1] + s.m256d_f64[3]);}
-#else
-    inline float    sse_sum(__m128 s)    {float *f = (float*) (&s); return ((f[0] + f[4]) + (f[2] + f[6])) + ((f[1] + f[5]) + (f[3] + f[7]));}
-    inline double   sse_sum(__m128d s)   {double *d = (double*) (&s); return (d[0] + d[2]) + (d[1] + d[3]);}
-#endif
-    inline float  sse_dot(__m256 s1, __m256 s2)
-    {
-        __m256 temp = _mm256_dp_ps(s1, s2, 0xf1);
-        float* f = (float*) (&temp); return f[0] + f[4];
-    }
-    inline double  sse_dot(__m256d s1, __m256d s2)		{return sse_sum(sse_mul(s1, s2));}
-
-    inline void    sse_store(float *p, __m256 s){_mm256_store_ps(p, s); }
-    inline void    sse_store(double *p, __m256d s)  {_mm256_store_pd(p, s); }
-
-    inline void data_prefetch(const void* p) {_mm_prefetch((const char*)p, _MM_HINT_NTA);}
-};
-
-namespace ProgramCPU
-{
-    using namespace MYAVX;
-    #define SSE_ZERO SSE<Float>::zero()
-    #define SSE_T typename SSE<Float>::sse_type
-
-    /////////////////////////////
-    inline void   ScaleJ8(float* jcx, float* jcy, const float* sj)
-    {
-         __m256 ps = _mm256_load_ps(sj);
-        _mm256_store_ps(jcx, _mm256_mul_ps(_mm256_load_ps(jcx), ps));
-        _mm256_store_ps(jcy, _mm256_mul_ps(_mm256_load_ps(jcy), ps));
-    }
-    inline void   ScaleJ4(double* jcx, double* jcy, const double* sj)
-    {
-         __m256d ps = _mm256_load_pd(sj);
-         _mm256_store_pd(jcx, _mm256_mul_pd(_mm256_load_pd(jcx), ps));
-         _mm256_store_pd(jcy, _mm256_mul_pd(_mm256_load_pd(jcy), ps));
-    }
-    inline void   ScaleJ8(double* jcx, double* jcy, const double* sj)
-    {
-        ScaleJ4(jcx, jcy, sj);
-        ScaleJ4(jcx + 4, jcy + 4, sj + 4);
-    }
-    inline float   DotProduct8(const float* v1, const float* v2)
-    {
-        return sse_dot(_mm256_load_ps(v1), _mm256_load_ps(v2));
-    }
-    inline double   DotProduct8(const double* v1, const double* v2)
-    {
-        __m256d ds = _mm256_add_pd(
-            _mm256_mul_pd(_mm256_load_pd(v1),     _mm256_load_pd(v2)),
-            _mm256_mul_pd(_mm256_load_pd(v1 + 4), _mm256_load_pd(v2 + 4)));
-        return sse_sum(ds);
-    }
-
-    inline void  ComputeTwoJX(const float* jc, const float* jp, const float* xc, const float* xp, float* jx)
-    {
-        __m256 xcm = _mm256_load_ps(xc), jc1 = _mm256_load_ps(jc), jc2 = _mm256_load_ps(jc + 8);
-        jx[0] = sse_dot(jc1, xcm) +  (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-        jx[1] = sse_dot(jc2, xcm) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);
-    }
-
-    inline void ComputeTwoJX(const double* jc, const double* jp, const double* xc, const double* xp, double* jx)
-    {
-        __m256d xc1 = _mm256_load_pd(xc),		xc2 = _mm256_load_pd(xc + 4);
-        __m256d jc1 = _mm256_load_pd(jc),       jc2 = _mm256_load_pd(jc + 4);
-        __m256d jc3 = _mm256_load_pd(jc + 8),   jc4 = _mm256_load_pd(jc + 12);
-        __m256d ds1 = _mm256_add_pd(_mm256_mul_pd(jc1, xc1), _mm256_mul_pd(jc2, xc2));
-        __m256d ds2 = _mm256_add_pd(_mm256_mul_pd(jc3, xc1), _mm256_mul_pd(jc4, xc2));
-        jx[0] = sse_sum(ds1)  + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-        jx[1] = sse_sum(ds2) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);
-    }
-
-    //v += ax
-    inline void   AddScaledVec8(float a, const float* x, float* v)
-    {
-        __m256 aa = sse_load1(&a);
-        _mm256_store_ps(v, _mm256_add_ps(_mm256_mul_ps(_mm256_load_ps(x), aa), _mm256_load_ps(v)));
-        //_mm256_store_ps(v, _mm256_fmadd_ps(_mm256_load_ps(x), aa, _mm256_load_ps(v)));
-    }
-    //v += ax
-    inline void   AddScaledVec8(double a, const double* x, double* v)
-    {
-       __m256d aa = sse_load1(&a);
-        _mm256_store_pd(v  , _mm256_add_pd( _mm256_mul_pd(_mm256_load_pd(x    ), aa), _mm256_load_pd(v  )));
-        _mm256_store_pd(v+4, _mm256_add_pd( _mm256_mul_pd(_mm256_load_pd(x + 4), aa), _mm256_load_pd(v+4)));
-    }
-
-    inline void AddBlockJtJ(const float * jc, float * block, int vn)
-    {
-        __m256 j = _mm256_load_ps(jc);
-        for(int i = 0; i < vn; ++i, ++jc, block += 8)
-        {
-            __m256 a = sse_load1(jc);
-            _mm256_store_ps(block, _mm256_add_ps(_mm256_mul_ps(a, j), _mm256_load_ps(block)));
-        }
-    }
-
-    inline void AddBlockJtJ(const double * jc, double * block, int vn)
-    {
-        __m256d j1 = _mm256_load_pd(jc);
-        __m256d j2 = _mm256_load_pd(jc + 4);
-        for(int i = 0; i < vn; ++i, ++jc, block += 8)
-        {
-            __m256d a = sse_load1(jc);
-            _mm256_store_pd(block + 0, _mm256_add_pd(_mm256_mul_pd(a, j1), _mm256_load_pd(block + 0)));
-            _mm256_store_pd(block + 4, _mm256_add_pd(_mm256_mul_pd(a, j2), _mm256_load_pd(block + 4)));
-        }
-    }
-};
-
-#endif
-
-#ifdef CPUPBA_USE_NEON
-#define CPUPBA_USE_SIMD
-#define SIMD_NO_SQRT
-#define SIMD_NO_DOUBLE
-namespace MYNEON
-{
-    template<class Float> class SSE{};
-    template<>  class SSE<float>  { public: typedef  float32x4_t sse_type;   };
-
-    ////////////////////////////////////////////
-    template <class Float> inline size_t sse_step()    {return 16 / sizeof(Float); };
-    inline float32x4_t sse_load1(const float* p)     {return vld1q_dup_f32(p); }
-    inline float32x4_t sse_load(const float* p)      {return vld1q_f32(p);}
-    inline float32x4_t sse_loadzero(){float z = 0; return sse_load1(&z); }
-    inline float32x4_t sse_add(float32x4_t s1, float32x4_t s2)     {return vaddq_f32(s1, s2);}
-    inline float32x4_t sse_sub(float32x4_t s1, float32x4_t s2)     {return vsubq_f32(s1, s2);}
-    inline float32x4_t sse_mul(float32x4_t s1, float32x4_t s2)     {return vmulq_f32(s1, s2);}
-    //inline float32x4_t sse_sqrt(float32x4_t s)                {return _mm_sqrt_ps(s); }
-    inline float    sse_sum(float32x4_t s)    {float *f = (float*) (&s); return (f[0] + f[2]) + (f[1] + f[3]);}
-    inline void     sse_store(float *p, float32x4_t s){vst1q_f32(p, s); }
-    inline void		data_prefetch(const void* p) {}
-};
-namespace ProgramCPU
-{
-    using namespace MYNEON;
-    #define SSE_ZERO sse_loadzero()
-    #define SSE_T typename SSE<Float>::sse_type
-    /////////////////////////////
-    inline void   ScaleJ4(float* jcx, float* jcy, const float* sj)
-    {
-         float32x4_t ps = sse_load(sj);
-        sse_store(jcx, sse_mul(sse_load(jcx), ps));
-        sse_store(jcy, sse_mul(sse_load(jcy), ps));
-    }
-    inline void   ScaleJ8(float* jcx, float* jcy, const float* sj)
-    {
-        ScaleJ4(jcx, jcy, sj);
-        ScaleJ4(jcx + 4, jcy + 4, sj + 4);
-    }
-
-    inline float   DotProduct8(const float* v1, const float* v2)
-    {
-        float32x4_t ds = sse_add(
-            sse_mul(sse_load(v1),     sse_load(v2)),
-            sse_mul(sse_load(v1 + 4), sse_load(v2 + 4)));
-        return sse_sum(ds);
-    }
-
-    inline void  ComputeTwoJX(const float* jc, const float* jp, const float* xc, const float* xp, float* jx)
-    {
-#ifdef POINT_DATA_ALIGN4
-        float32x4_t xc1 = sse_load(xc), xc2 = sse_load(xc + 4), mxp = sse_load(xp);
-        float32x4_t ds1 = sse_add(sse_mul(sse_load(jc),  xc1), sse_mul(sse_load(jc + 4), xc2));
-        float32x4_t dx1 = sse_add(ds1, sse_mul(sse_load(jp), mxp));
-        jx[0] = sse_sum(dx1);
-        float32x4_t ds2 = sse_add(sse_mul(sse_load(jc + 8), xc1), sse_mul(sse_load(jc + 12), xc2));
-        float32x4_t dx2 = sse_add(ds2, sse_mul(sse_load(jp + 4), mxp));
-        jx[1] = sse_sum(dx2);
-#else
-        float32x4_t xc1 = sse_load(xc),		xc2 = sse_load(xc + 4);
-        float32x4_t jc1 = sse_load(jc),       jc2 = sse_load(jc + 4);
-        float32x4_t jc3 = sse_load(jc + 8),   jc4 = sse_load(jc + 12);
-        float32x4_t ds1 = sse_add(sse_mul(jc1, xc1), sse_mul(jc2, xc2));
-        float32x4_t ds2 = sse_add(sse_mul(jc3, xc1), sse_mul(jc4, xc2));
-        jx[0] = sse_sum(ds1) + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-        jx[1] = sse_sum(ds2) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);
-        /*jx[0] = (sse_dot(jc1, xc1) + sse_dot(jc2, xc2)) + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-        jx[1] = (sse_dot(jc3, xc1) + sse_dot(jc4, xc2)) + (jp[POINT_ALIGN] * xp[0] + jp[POINT_ALIGN+1] * xp[1] + jp[POINT_ALIGN+2] * xp[2]);*/
-#endif
-    }
-
-    //v += ax
-    inline void   AddScaledVec8(float a, const float* x, float* v)
-    {
-        float32x4_t aa = sse_load1(&a);
-        sse_store(v  , sse_add( sse_mul(sse_load(x    ), aa), sse_load(v  )));
-        sse_store(v+4, sse_add( sse_mul(sse_load(x + 4), aa), sse_load(v+4)));
-    }
-
-    inline void AddBlockJtJ(const float * jc, float * block, int vn)
-    {
-        float32x4_t j1 = sse_load(jc);
-        float32x4_t j2 = sse_load(jc + 4);
-        for(int i = 0; i < vn; ++i, ++jc, block += 8)
-        {
-            float32x4_t a = sse_load1(jc);
-            sse_store(block + 0, sse_add(sse_mul(a, j1), sse_load(block + 0)));
-            sse_store(block + 4, sse_add(sse_mul(a, j2), sse_load(block + 4)));
-        }
-    }
-};
-#endif
-
-namespace ProgramCPU
-{
-    int		__num_cpu_cores = 0;
-    double ComputeVectorNorm(const avec& vec, int mt = 0);
-
-#if defined(CPUPBA_USE_SIMD)
     void ComputeSQRT(avec& vec)
     {
-#ifndef SIMD_NO_SQRT
-        const size_t step =sse_step<double>();
-        double * p = &vec[0], * pe = p + vec.size(), *pex = pe - step;
-        for(; p <= pex; p += step)   sse_store(p, sse_sqrt(sse_load(p)));
-        for(; p < pe; ++p) p[0] = sqrt(p[0]);
-#else
-        for(Float* it = vec.begin(); it < vec.end(); ++it)   *it  = sqrt(*it);
-#endif
+        double* v = vec.begin();
+        std::size_t len = vec.size();
+#pragma omp parallel for
+        for (std::size_t i = 0; i < len; ++i)
+            v[i] = std::sqrt(v[i]);
     }
 
     void ComputeRSQRT(avec& vec)
     {
-        double * p = &vec[0], * pe = p + vec.size();
-        for(; p < pe; ++p) p[0] = (p[0] == 0? 0 : double(1.0) / p[0]);
-        ComputeSQRT(vec);
+        double* v = vec.begin();
+        std::size_t len = vec.size();
+#pragma omp parallel for
+        for (std::size_t i = 0; i < len; ++i)
+            v[i] = v[i] == 0.0 ? 0.0 : 1/std::sqrt(v[i]);
     }
 
-    void SetVectorZero(double* p, double * pe)
-    {
-         SSE_T sse = SSE_ZERO;
-         const size_t step =sse_step<double>();
-         double * pex = pe - step;
-         for(; p <= pex; p += step) sse_store(p, sse);
-         for(; p < pe; ++p) *p = 0;
-    }
+    inline void SetVectorZero(double* p,double* pe)  { std::fill(p, pe, 0.0);                     }
+    inline void SetVectorZero(avec& vec)    { std::fill(vec.begin(), vec.end(), 0.0);    }
 
-    void SetVectorZero(avec& vec)
-    {
-         double * p = &vec[0], * pe = p + vec.size();
-         SetVectorZero(p, pe);
-    }
-
-    //function not used
     inline void MemoryCopyA(const double* p, const double* pe, double* d)
     {
-        const size_t step = sse_step<double>();
-        const double* pex = pe - step;
-        for(; p <= pex; p += step, d += step) sse_store(d, sse_load(p));
-        //while(p < pe) *d++ = *p++;
-    }
-
-    void ComputeVectorNorm(const double* p, const double* pe, double* psum)
-    {
-         SSE_T sse = SSE_ZERO;
-         const size_t step =sse_step<double>();
-         const double * pex = pe - step;
-         for(; p <= pex; p += step)
-         {
-             SSE_T ps = sse_load(p);
-             sse = sse_add(sse, sse_mul(ps, ps));
-         }
-         double sum = sse_sum(sse);
-         for(; p < pe; ++p) sum += p[0] * p[0];
-        *psum = sum;
+        std::copy(p, pe, d);
     }
 
     double ComputeVectorNormW(const avec& vec, const avec& weight)
     {
-        if(weight.begin() != NULL)
-        {
-             SSE_T sse = SSE_ZERO;
-             const size_t step =sse_step<double>();
-             const double * p = vec, * pe = p + vec.size(), *pex = pe - step;
-             const double * w = weight;
-             for(; p <= pex; p += step, w+= step)
-             {
-                 SSE_T pw = sse_load(w), ps = sse_load(p);
-                 sse = sse_add(sse, sse_mul(sse_mul(ps, pw), ps));
-             }
-             double sum = sse_sum(sse);
-             for(; p < pe; ++p, ++w) sum += p[0] * w[0] * p[0];
-             return sum;
-        }else
-        {
-            return ComputeVectorNorm(vec, 0);
-        }
-    }
-
-    double ComputeVectorDot(const avec& vec1, const avec& vec2)
-    {
-         SSE_T sse = SSE_ZERO;
-         const size_t step =sse_step<double>();
-         const double * p1 = vec1, * pe = p1 + vec1.size(), *pex = pe - step;
-         const double * p2 = vec2;
-         for(; p1 <= pex; p1 += step, p2+= step)
-         {
-             SSE_T ps1 = sse_load(p1), ps2 = sse_load(p2);
-             sse = sse_add(sse, sse_mul(ps1, ps2));
-         }
-         double sum = sse_sum(sse);
-         for(; p1 < pe; ++p1, ++p2) sum += p1[0]* p2[0];
-         return sum;
-    }
-
-    void   ComputeVXY(const avec& vec1, const avec& vec2, avec& result, size_t part = 0, size_t skip = 0)
-    {
-        const size_t step =sse_step<double>();
-        const double * p1 = vec1 + skip, * pe = p1 + (part ? part : vec1.size()), * pex = pe - step;
-        const double * p2 = vec2 + skip;
-        double * p3 = result + skip;
-        for(; p1 <= pex; p1 += step, p2 += step, p3 += step)
-        {
-            SSE_T  ps1 = sse_load(p1), ps2 = sse_load(p2);
-            sse_store(p3, sse_mul(ps1, ps2));
-        }
-        for(; p1 < pe; ++p1, ++p2, ++p3) *p3 = p1[0] * p2[0];
-    }
-
-    void   ComputeSAXPY(double a, const double* p1, const double* p2, double* p3, double* pe)
-    {
-        const size_t step =sse_step<double>();
-        SSE_T aa = sse_load1(&a);
-        double *pex = pe - step;
-        if(a == 1.0f)
-        {
-            for(; p3 <= pex; p1 += step, p2 += step, p3 += step)
-            {
-                SSE_T ps1 = sse_load(p1), ps2 = sse_load(p2);
-                sse_store(p3,sse_add(ps2, ps1));
-            }
-        }else if(a == -1.0f)
-        {
-            for(; p3 <= pex; p1 += step, p2 += step, p3 += step)
-            {
-                SSE_T ps1 = sse_load(p1), ps2 = sse_load(p2);
-                sse_store(p3,sse_sub(ps2, ps1));
-            }
-        }else
-        {
-            for(; p3 <= pex; p1 += step, p2 += step, p3 += step)
-            {
-                SSE_T ps1 = sse_load(p1), ps2 = sse_load(p2);
-                sse_store(p3,sse_add(ps2, sse_mul(ps1, aa)));
-            }
-        }
-        for(; p3 < pe; ++p1, ++p2, ++p3) p3[0] = a * p1[0] + p2[0];
-    }
-
-    void   ComputeSAX(double a, const avec& vec1, avec& result)
-    {
-        const size_t step = sse_step<double>();
-        SSE_T aa = sse_load1(&a);
-        const double * p1 = vec1, *pe = p1 + vec1.size(), *pex = pe - step;
-        double * p3 = result;
-        for(; p1 <= pex; p1 += step, p3 += step)
-        {
-            sse_store(p3, sse_mul(sse_load(p1), aa));
-        }
-        for(; p1 < pe; ++p1,  ++p3) p3[0] = a * p1[0];
-    }
-
-    inline void   ComputeSXYPZ(double a, const double* p1, const double* p2, const double* p3, double* p4, double* pe)
-    {
-        const size_t step =sse_step<double>();
-        SSE_T aa = sse_load1(&a);
-        double *pex = pe - step;
-        for(; p4 <= pex; p1 += step, p2 += step, p3 += step, p4 += step)
-        {
-            SSE_T ps1 = sse_load(p1), ps2 = sse_load(p2), ps3 = sse_load(p3);
-            sse_store(p4,sse_add(ps3, sse_mul(sse_mul(ps1, aa), ps2)));
-        }
-        for(; p4 < pe; ++p1, ++p2, ++p3, ++ p4) p4[0] = a * p1[0] * p2[0] + p3[0];
-    }
-
-#else
-    void ComputeSQRT(avec& vec)
-    {
-        Float* it = vec.begin();
-        for(; it < vec.end(); ++it)
-        {
-            *it  = sqrt(*it);
-        }
-    }
-
-    void ComputeRSQRT(avec& vec)
-    {
-        Float* it = vec.begin();
-        for(; it < vec.end(); ++it)
-        {
-            *it  = (*it == 0 ? 0 : Float(1.0) / sqrt(*it));
-        }
-    }
-
-    inline void SetVectorZero(Float* p,Float* pe)  { std::fill(p, pe, 0);                     }
-    inline void SetVectorZero(avec& vec)    { std::fill(vec.begin(), vec.end(), 0);    }
-
-    inline void MemoryCopyA(const Float* p, const Float* pe, Float* d)
-    {
-        while(p < pe) *d++ = *p++;
-    }
-
-    double ComputeVectorNormW(const avec& vec, const avec& weight)
-    {
-        double sum = 0;
-        const Float*  it1 = vec.begin(), * it2 = weight.begin();
-        for(; it1 < vec.end(); ++it1, ++it2)
-        {
-            sum += (*it1) * (*it2) * (*it1);
-        }
+        double const* v = vec.begin();
+        double const* w = weight.begin();
+        double sum = 0.0;
+        std::size_t len = vec.size();
+#pragma omp parallel for reduction(+:sum)
+        for (std::size_t i = 0; i < len; ++i)
+            sum += v[i] * w[i] * v[i];
         return sum;
     }
 
     double ComputeVectorDot(const avec& vec1, const avec& vec2)
     {
-        double sum = 0;
-        const Float*   it1 = vec1.begin(), *it2 = vec2.begin();
-        for(; it1 < vec1.end(); ++it1, ++it2)
-        {
-            sum += (*it1) * (*it2);
-        }
+        double const* v = vec1.begin();
+        double const* w = vec2.begin();
+        double sum = 0.0;
+        std::size_t len = vec1.size();
+#pragma omp parallel for reduction(+:sum)
+        for (std::size_t i = 0; i < len; ++i)
+            sum += v[i] * w[i];
         return sum;
     }
 
-    void ComputeVectorNorm(const Float* p, const Float* pe, double* psum)
+    double ComputeVectorNorm(const avec& vec, int mt = 0)
     {
-        double sum = 0;
-        for(; p < pe; ++p)  sum += (*p) * (*p);
-        *psum = sum;
+        double const* v = vec.begin();
+        double sum = 0.0;
+        std::size_t len = vec.size();
+#pragma omp parallel for reduction(+:sum)
+        for (std::size_t i = 0; i < len; ++i)
+            sum += v[i] * v[i];
+        return sum;
     }
 
     inline void   ComputeVXY(const avec& vec1, const avec& vec2, avec& result, size_t part =0, size_t skip = 0)
     {
-        const Float*  it1 = vec1.begin() + skip, *it2 = vec2.begin() + skip;
-        const Float*  ite = part ? (it1 + part) : vec1.end();
-        Float* it3 = result.begin() + skip;
-        for(; it1 < ite; ++it1, ++it2, ++it3)
-        {
-             (*it3) = (*it1) * (*it2);
-        }
+        const double*  it1 = vec1.begin() + skip, *it2 = vec2.begin() + skip;
+        const double*  ite = part ? (it1 + part) : vec1.end();
+        double* it3 = result.begin() + skip;
+        size_t n = ite - it1;
+#pragma omp parallel for
+        for(std::size_t i = 0; i < n; ++i)
+             it3[i] = it1[i] * it2[i];
     }
 
-    void   ScaleJ8(Float* jcx, Float* jcy, const Float* sj)
+    void   ScaleJ8(double* jcx, double* jcy, const double* sj)
     {
         for(int i = 0; i < 8; ++i) {jcx[i] *= sj[i]; jcy[i] *= sj[i]; }
     }
 
-    inline void AddScaledVec8(Float a, const Float* x, Float* v)
+    inline void AddScaledVec8(double a, const double* x, double* v)
     {
         for(int i = 0; i < 8; ++i) v[i] += (a * x[i]);
     }
 
-    void   ComputeSAX(Float a, const avec& vec1, avec& result)
+    void   ComputeSAX(double a, const avec& vec1, avec& result)
     {
-        const Float*  it1 = vec1.begin();
-        Float* it3 = result.begin();
-        for(;  it1 < vec1.end(); ++it1,  ++it3)
-        {
-             (*it3) = (a * (*it1));
-        }
+        const double*  it1 = vec1.begin();
+        double* it3 = result.begin();
+#pragma omp parallel for
+        for(std::size_t i = 0; i < vec1.size(); ++i)
+             it3[i] = a * it1[i];
     }
 
-    inline void   ComputeSXYPZ(Float a, const Float* p1, const Float* p2, const Float* p3, Float* p4, Float* pe)
+    inline void   ComputeSXYPZ(double a, const double* p1, const double* p2, const double* p3, double* p4, double* pe)
     {
-        for(; p4 < pe; ++p1, ++p2, ++p3, ++p4) *p4 = (a * (*p1) * (*p2) + (*p3));
+        std::size_t n = pe - p4;
+#pragma omp parallel for
+        for(std::size_t i = 0; i < n; ++i)
+             p4[i] = a * p1[i] * p2[i] + p3[i];
     }
 
-    void   ComputeSAXPY(Float a, const Float* it1, const Float* it2, Float* it3, Float* ite)
+    void   ComputeSAXPY(double a, const double* it1, const double* it2, double* it3, double* ite)
     {
-        if(a == (Float)1.0)
-        {
-            for( ; it3 < ite; ++it1, ++it2, ++it3)
-            {
-                 (*it3) = ((*it1) + (*it2));
-            }
-        }else
-        {
-            for( ; it3 < ite; ++it1, ++it2, ++it3)
-            {
-                 (*it3) = (a * (*it1) + (*it2));
-            }
-        }
+        std::size_t n = ite - it3;
+#pragma omp parallel for
+        for(std::size_t i = 0; i < n; ++i)
+             it3[i] = a * it1[i] + it2[i];
     }
 
-    void AddBlockJtJ(const Float * jc, Float * block, int vn)
+    void AddBlockJtJ(const double * jc, double * block, int vn)
     {
         for(int i = 0; i < vn; ++i)
         {
-            Float* row = block + i * 8,  a = jc[i];
+            double* row = block + i * 8,  a = jc[i];
             for(int j = 0; j < vn; ++j) row[j] += a * jc[j];
         }
     }
-#endif
 
-#ifdef _WIN32
-#define DEFINE_THREAD_DATA(X)       template<class Float> struct X##_STRUCT {
-#define DECLEAR_THREAD_DATA(X, ...) X##_STRUCT <double>  tdata = { __VA_ARGS__ }; \
-                                    X##_STRUCT <double>* newdata = new X##_STRUCT <double>(tdata)
-#define BEGIN_THREAD_PROC(X)        }; template<class Float> DWORD X##_PROC(X##_STRUCT <Float> * q) {
-#define END_THREAD_RPOC(X)          delete q; return 0;}
-
-#if defined(WINAPI_FAMILY) && WINAPI_FAMILY==WINAPI_FAMILY_APP
-#define MYTHREAD std::thread
-#define RUN_THREAD(X, t, ...)       DECLEAR_THREAD_DATA(X, __VA_ARGS__);\
-                                    t = std::thread(X##_PROC <Float>, newdata)
-#define WAIT_THREAD(tv, n)    {     for(size_t i = 0; i < size_t(n); ++i) tv[i].join(); }
-#else
-#define MYTHREAD HANDLE
-#define RUN_THREAD(X, t, ...)       DECLEAR_THREAD_DATA(X, __VA_ARGS__);\
-                                    t = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)X##_PROC <double>, newdata, 0, 0)
-#define WAIT_THREAD(tv, n)    {     WaitForMultipleObjects((DWORD)n, tv, TRUE, INFINITE); \
-                                    for(size_t i = 0; i < size_t(n); ++i) CloseHandle(tv[i]); }
-#endif
-#else
-#define DEFINE_THREAD_DATA(X)       template<class Float> struct X##_STRUCT { int tid;
-#define DECLEAR_THREAD_DATA(X, ...) X##_STRUCT <double>  tdata = {i,  __VA_ARGS__ }; \
-                                    X##_STRUCT <double>* newdata = new X##_STRUCT <double>(tdata)
-#define BEGIN_THREAD_PROC(X)        }; template<class Float> void* X##_PROC(X##_STRUCT <Float> * q){
-   //                                 cpu_set_t mask;        CPU_ZERO( &mask ); CPU_SET( q->tid, &mask );
-   //                                 if( sched_setaffinity(0, sizeof(mask), &mask ) == -1 )
-   //                                     std::cout <<"WARNING: Could not set CPU Affinity, continuing...\n";
-
-#define END_THREAD_RPOC(X)          delete q; return 0;}\
-                                    template<class Float> struct X##_FUNCTOR {\
-                                    typedef  void* (*func_type) (X##_STRUCT <Float> * );\
-                                    static func_type get() {return & (X##_PROC<Float>);}    };
-#define MYTHREAD  pthread_t
-
-#define RUN_THREAD(X, t, ...)       DECLEAR_THREAD_DATA(X, __VA_ARGS__);\
-                                    pthread_create(&t, NULL, (void* (*)(void*))X##_FUNCTOR <double> :: get(), newdata)
-#define WAIT_THREAD(tv, n)      {   for(size_t i = 0; i < size_t(n); ++i) pthread_join(tv[i], NULL) ;}
-#endif
     inline void MemoryCopyB(const double* p, const double* pe, double* d)
     {
-        while(p < pe) *d++ = *p++;
+        std::copy(p, pe, d);
     }
 
-#ifndef CPUPBA_USE_SIMD
     inline double   DotProduct8(const double* v1, const double* v2)
     {
         return  v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2] + v1[3] * v2[3] +
@@ -850,7 +186,6 @@ namespace ProgramCPU
             jx[0] = DotProduct8(jc, xc)     + (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
             jx[1] = DotProduct8(jc + 8, xc) + (jp[3] * xp[0] + jp[4] * xp[1] + jp[5] * xp[2]);
     }
-#endif
 
     double  ComputeVectorMax(const avec& vec)
     {
@@ -880,70 +215,9 @@ namespace ProgramCPU
 
     }
 
-    DEFINE_THREAD_DATA(ComputeSAXPY)
-           double a; const double * p1, * p2; double* p3, * pe;
-    BEGIN_THREAD_PROC(ComputeSAXPY)
-        ComputeSAXPY(q->a, q->p1, q->p2, q->p3, q-> pe);
-    END_THREAD_RPOC(ComputeSAXPY)
-
     void   ComputeSAXPY(double a, const avec& vec1, const avec& vec2, avec& result, int mt = 0)
     {
-        const bool auto_multi_thread = true;
-        if(auto_multi_thread && mt == 0) {  mt = AUTO_MT_NUM( result.size() * 2);  }
-        if(mt > 1 && result.size() >= static_cast<std::size_t>(mt * 4))
-        {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            const double* p1 = vec1.begin(), * p2 = vec2.begin();
-            double* p3 = result.begin();
-            for (int i = 0; i < thread_num; ++i)
-            {
-                size_t first = (result.size() * i / thread_num + FLOAT_ALIGN - 1 ) / FLOAT_ALIGN  * FLOAT_ALIGN ;
-                size_t last_ = (result.size() * (i + 1) / thread_num + FLOAT_ALIGN - 1) / FLOAT_ALIGN * FLOAT_ALIGN;
-                size_t last  = std::min(last_, result.size());
-                RUN_THREAD(ComputeSAXPY, threads[i], a, p1 + first, p2 + first, p3 + first, p3 + last);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            ComputeSAXPY(a, vec1.begin(), vec2.begin(), result.begin(), result.end());
-        }
-    }
-
-    DEFINE_THREAD_DATA(ComputeVectorNorm)
-          const double * p, * pe; double* sum;
-    BEGIN_THREAD_PROC(ComputeVectorNorm)
-        ComputeVectorNorm(q->p, q->pe, q-> sum);
-    END_THREAD_RPOC(ComputeVectorNorm)
-
-    double ComputeVectorNorm(const avec& vec, int mt)
-    {
-        const bool auto_multi_thread = true;
-        if(auto_multi_thread && mt == 0) {  mt = AUTO_MT_NUM(vec.size());  }
-        if(mt > 1 && vec.size() >= static_cast<std::size_t>(mt * 4))
-        {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            double sumv[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            const double * p = vec;
-            for (int i = 0; i < thread_num; ++i)
-            {
-                size_t first = (vec.size() * i / thread_num + FLOAT_ALIGN - 1 ) / FLOAT_ALIGN  * FLOAT_ALIGN ;
-                size_t last_ = (vec.size() * (i + 1) / thread_num + FLOAT_ALIGN - 1) / FLOAT_ALIGN * FLOAT_ALIGN;
-                size_t last  = std::min(last_, vec.size());
-                RUN_THREAD(ComputeVectorNorm, threads[i], p + first,  p + last, sumv + i);
-            }
-            WAIT_THREAD(threads, thread_num);
-            double sum = 0;
-            for(int i = 0; i < thread_num; ++i)
-                sum += sumv[i];
-            return sum;
-        }else
-        {
-            double sum;
-            ComputeVectorNorm(vec.begin(), vec.end(), &sum);
-            return sum;
-        }
+        ComputeSAXPY(a, vec1.begin(), vec2.begin(), result.begin(), result.end());
     }
 
     void GetRodriguesRotation(const double m[3][3], double r[3])
@@ -1087,123 +361,67 @@ namespace ProgramCPU
         }
     }
 
-    // Forward declare (sfu).
-    void ComputeProjection(size_t nproj, const double* camera, const double* point, const double* ms,
-                           const int * jmap, double* pj, int radial, int mt);
-
-    DEFINE_THREAD_DATA(ComputeProjection)
-            size_t nproj; const double* camera, *point, * ms;
-            const int *jmap; double* pj; int radial_distortion;
-    BEGIN_THREAD_PROC(ComputeProjection)
-        ComputeProjection( q->nproj, q->camera, q->point, q->ms, q->jmap, q->pj, q->radial_distortion, 0);
-    END_THREAD_RPOC(ComputeProjection)
-
     void ComputeProjection(size_t nproj, const double* camera, const double* point, const double* ms,
                            const int * jmap, double* pj, int radial, int mt)
     {
-        if(mt > 1 && nproj >= static_cast<std::size_t>(mt))
+        for(size_t i = 0; i < nproj; ++i, jmap += 2, ms += 2, pj += 2)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
-            {
-                size_t first = nproj * i / thread_num;
-                size_t last_ = nproj * (i + 1) / thread_num;
-                size_t last  = std::min(last_, nproj);
-                RUN_THREAD(ComputeProjection, threads[i],
-                    last - first, camera, point, ms + 2 * first, jmap + 2 * first, pj + 2 * first, radial);
-            }
-            WAIT_THREAD(threads, thread_num);
+            const double* c = camera + jmap[0] * 16;
+            const double* m = point + jmap[1] * POINT_ALIGN;
+            /////////////////////////////////////////////////////
+            double p0 = c[4 ]*m[0]+c[5 ]*m[1]+c[6 ]*m[2] + c[1];
+            double p1 = c[7 ]*m[0]+c[8 ]*m[1]+c[9 ]*m[2] + c[2];
+            double p2 = c[10]*m[0]+c[11]*m[1]+c[12]*m[2] + c[3];
 
-        }else
-        {
-            for(size_t i = 0; i < nproj; ++i, jmap += 2, ms += 2, pj += 2)
+            if(radial == 1)
             {
-                const double* c = camera + jmap[0] * 16;
-                const double* m = point + jmap[1] * POINT_ALIGN;
-                /////////////////////////////////////////////////////
-                double p0 = c[4 ]*m[0]+c[5 ]*m[1]+c[6 ]*m[2] + c[1];
-                double p1 = c[7 ]*m[0]+c[8 ]*m[1]+c[9 ]*m[2] + c[2];
-                double p2 = c[10]*m[0]+c[11]*m[1]+c[12]*m[2] + c[3];
-
-                if(radial == 1)
-                {
-                    double rr = double(1.0)  + c[13] * (p0 * p0 + p1 * p1) / (p2 * p2);
-                    double f_p2 = c[0] * rr / p2;
-                    pj[0] = ms[0] - p0 * f_p2;
-                    pj[1] = ms[1] - p1 * f_p2;
-                }else if(radial == -1)
-                {
-                    double f_p2 = c[0] / p2;
-                    double  rd = double(1.0) + c[13] * (ms[0] * ms[0] + ms[1] * ms[1]) ;
-                    pj[0] = ms[0] * rd  - p0 * f_p2;
-                    pj[1] = ms[1] * rd  - p1 * f_p2;
-                }else
-                {
-                    pj[0] = ms[0] - p0 * c[0] / p2;
-                    pj[1] = ms[1] - p1 * c[0] / p2;
-                }
+                double rr = double(1.0)  + c[13] * (p0 * p0 + p1 * p1) / (p2 * p2);
+                double f_p2 = c[0] * rr / p2;
+                pj[0] = ms[0] - p0 * f_p2;
+                pj[1] = ms[1] - p1 * f_p2;
+            }else if(radial == -1)
+            {
+                double f_p2 = c[0] / p2;
+                double  rd = double(1.0) + c[13] * (ms[0] * ms[0] + ms[1] * ms[1]) ;
+                pj[0] = ms[0] * rd  - p0 * f_p2;
+                pj[1] = ms[1] * rd  - p1 * f_p2;
+            }else
+            {
+                pj[0] = ms[0] - p0 * c[0] / p2;
+                pj[1] = ms[1] - p1 * c[0] / p2;
             }
         }
     }
 
-    // forward declare
-    void ComputeProjectionX(size_t nproj, const double* camera, const double* point, const double* ms,
-                           const int * jmap, double* pj, int radial, int mt);
-
-    DEFINE_THREAD_DATA(ComputeProjectionX)
-            size_t nproj; const double* camera, *point, * ms;
-            const int *jmap; double* pj; int radial_distortion;
-    BEGIN_THREAD_PROC(ComputeProjectionX)
-        ComputeProjectionX( q->nproj, q->camera, q->point, q->ms, q->jmap, q->pj, q->radial_distortion, 0);
-    END_THREAD_RPOC(ComputeProjectionX)
-
     void ComputeProjectionX(size_t nproj, const double* camera, const double* point, const double* ms,
                            const int * jmap, double* pj, int radial, int mt)
     {
-        if (mt > 1 && nproj >= static_cast<std::size_t>(mt))
+        for(size_t i = 0; i < nproj; ++i, jmap += 2, ms += 2, pj += 2)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
+            const double* c = camera + jmap[0] * 16;
+            const double* m = point + jmap[1] * POINT_ALIGN;
+            /////////////////////////////////////////////////////
+            double p0 = c[4 ]*m[0]+c[5 ]*m[1]+c[6 ]*m[2] + c[1];
+            double p1 = c[7 ]*m[0]+c[8 ]*m[1]+c[9 ]*m[2] + c[2];
+            double p2 = c[10]*m[0]+c[11]*m[1]+c[12]*m[2] + c[3];
+            if(radial == 1)
             {
-                int first = nproj * i / thread_num;
-                int last_ = nproj * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)nproj);
-                RUN_THREAD(ComputeProjectionX, threads[i],
-                    last - first, camera, point, ms + 2 * first, jmap + 2 * first, pj + 2 * first, radial);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            for(size_t i = 0; i < nproj; ++i, jmap += 2, ms += 2, pj += 2)
+                double rr = double(1.0)  + c[13] * (p0 * p0 + p1 * p1) / (p2 * p2);
+                double f_p2 = c[0] / p2;
+                pj[0] = ms[0] / rr - p0 * f_p2;
+                pj[1] = ms[1] / rr - p1 * f_p2;
+            }else if(radial == -1)
             {
-                const double* c = camera + jmap[0] * 16;
-                const double* m = point + jmap[1] * POINT_ALIGN;
-                /////////////////////////////////////////////////////
-                double p0 = c[4 ]*m[0]+c[5 ]*m[1]+c[6 ]*m[2] + c[1];
-                double p1 = c[7 ]*m[0]+c[8 ]*m[1]+c[9 ]*m[2] + c[2];
-                double p2 = c[10]*m[0]+c[11]*m[1]+c[12]*m[2] + c[3];
-                if(radial == 1)
-                {
-                    double rr = double(1.0)  + c[13] * (p0 * p0 + p1 * p1) / (p2 * p2);
-                    double f_p2 = c[0] / p2;
-                    pj[0] = ms[0] / rr - p0 * f_p2;
-                    pj[1] = ms[1] / rr - p1 * f_p2;
-                }else if(radial == -1)
-                {
-                    double  rd = double(1.0) + c[13] * (ms[0] * ms[0] + ms[1] * ms[1]) ;
-                    double f_p2 = c[0] / p2 / rd;
-                    pj[0] = ms[0]  - p0 * f_p2;
-                    pj[1] = ms[1]  - p1 * f_p2;
-                }else
-                {
-                    pj[0] = ms[0] - p0 * c[0] / p2;
-                    pj[1] = ms[1] - p1 * c[0] / p2;
-                }
+                double  rd = double(1.0) + c[13] * (ms[0] * ms[0] + ms[1] * ms[1]) ;
+                double f_p2 = c[0] / p2 / rd;
+                pj[0] = ms[0]  - p0 * f_p2;
+                pj[1] = ms[1]  - p1 * f_p2;
+            }else
+            {
+                pj[0] = ms[0] - p0 * c[0] / p2;
+                pj[1] = ms[1] - p1 * c[0] / p2;
             }
         }
-
     }
 
     void ComputeProjectionQ(size_t nq, const double* camera,const int * qmap,  const double* wq, double* pj)
@@ -1396,74 +614,40 @@ namespace ProgramCPU
         }
     }
 
-    // Forward declare
-    void ComputeJacobian(size_t nproj, size_t ncam, const double* camera, const double* point, double*  jc, double* jp,
-                         const int* jmap, const double * sj, const double *  ms, const int * cmlist,
-                         bool intrinsic_fixed , int radial_distortion, bool shuffle, double* jct,
-                         int mt, int i0);
-
-    DEFINE_THREAD_DATA(ComputeJacobian)
-            size_t nproj, ncam; const double* camera, *point; double * jc, *jp;
-            const int *jmap; const double* sj, * ms; const int* cmlist;
-            bool intrinsic_fixed; int radial_distortion; bool shuffle; double* jct; int i0;
-    BEGIN_THREAD_PROC(ComputeJacobian)
-        ComputeJacobian( q->nproj, q->ncam, q->camera, q->point, q->jc, q->jp,
-                    q->jmap, q->sj,  q->ms, q->cmlist, q->intrinsic_fixed,
-                    q->radial_distortion, q->shuffle, q->jct, 0, q->i0);
-    END_THREAD_RPOC(ComputeJacobian)
-
     void ComputeJacobian(size_t nproj, size_t ncam, const double* camera, const double* point, double*  jc, double* jp,
                          const int* jmap, const double * sj, const double *  ms, const int * cmlist,
                          bool intrinsic_fixed , int radial_distortion, bool shuffle, double* jct,
                          int mt = 2, int i0 = 0)
     {
+        const double* sjc0 = sj;
+        const double* sjp0 = sj ?  sj + ncam * 8 : NULL;
 
-        if(mt > 1 && nproj >= static_cast<std::size_t>(mt))
+        for(size_t i = i0; i < nproj; ++i, jmap += 2, ms += 2, ++cmlist)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
+            int cidx = jmap[0], pidx = jmap[1];
+            const double* c = camera + cidx * 16, * pt = point + pidx * POINT_ALIGN;
+            double* jci = jc ? (jc + (shuffle? cmlist[0] : i)* 16)  : NULL;
+            double* jpi = jp ? (jp + i * POINT_ALIGN2) : NULL;
+
+            /////////////////////////////////////////////////////
+            JacobianOne(c, pt, ms, jci, jci + 8, jpi, jpi + POINT_ALIGN, intrinsic_fixed, radial_distortion);
+
+            ///////////////////////////////////////////////////
+            if(sjc0)
             {
-                int first = nproj * i / thread_num;
-                int last_ = nproj * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)nproj);
-                RUN_THREAD(ComputeJacobian, threads[i],
-                    last, ncam, camera, point, jc, jp, jmap + 2 * first, sj, ms + 2 * first, cmlist + first,
-                    intrinsic_fixed, radial_distortion, shuffle, jct, first);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            const double* sjc0 = sj;
-            const double* sjp0 = sj ?  sj + ncam * 8 : NULL;
-
-            for(size_t i = i0; i < nproj; ++i, jmap += 2, ms += 2, ++cmlist)
-            {
-                int cidx = jmap[0], pidx = jmap[1];
-                const double* c = camera + cidx * 16, * pt = point + pidx * POINT_ALIGN;
-                double* jci = jc ? (jc + (shuffle? cmlist[0] : i)* 16)  : NULL;
-                double* jpi = jp ? (jp + i * POINT_ALIGN2) : NULL;
-
-                /////////////////////////////////////////////////////
-                JacobianOne(c, pt, ms, jci, jci + 8, jpi, jpi + POINT_ALIGN, intrinsic_fixed, radial_distortion);
-
-                ///////////////////////////////////////////////////
-                if(sjc0)
+                //jacobian scaling
+                if(jci)
                 {
-                    //jacobian scaling
-                    if(jci)
-                    {
-                        ScaleJ8(jci, jci + 8, sjc0 + cidx * 8);
-                    }
-                    if(jpi)
-                    {
-                        const double* sjp = sjp0 + pidx * POINT_ALIGN;
-                        for(int j = 0; j < 3; ++j) {jpi[j] *= sjp[j]; jpi[POINT_ALIGN + j] *= sjp[j]; }
-                    }
+                    ScaleJ8(jci, jci + 8, sjc0 + cidx * 8);
                 }
-
-                if(jct && jc)    MemoryCopyB(jci, jci + 16, jct + cmlist[0] * 16);
+                if(jpi)
+                {
+                    const double* sjp = sjp0 + pidx * POINT_ALIGN;
+                    for(int j = 0; j < 3; ++j) {jpi[j] *= sjp[j]; jpi[POINT_ALIGN + j] *= sjp[j]; }
+                }
             }
+
+            if(jct && jc)    MemoryCopyB(jci, jci + 16, jct + cmlist[0] * 16);
         }
     }
 
@@ -1594,169 +778,112 @@ namespace ProgramCPU
         InvertSymmetricMatrix<T, n, m>( (T (*)[m]) a, (T (*)[m]) ai);
     }
 
-    // Forward declare.
-    void ComputeDiagonalBlockC(size_t ncam,  float lambda1, float lambda2, const double* jc, const int* cmap,
-                const int* cmlist, double* di, double* bi, int vn, bool jc_transpose, bool use_jq, int mt);
-
-    DEFINE_THREAD_DATA(ComputeDiagonalBlockC)
-        size_t ncam; float lambda1, lambda2; const double * jc; const int* cmap,* cmlist;
-        double * di, * bi; int vn; bool jc_transpose, use_jq;
-    BEGIN_THREAD_PROC(ComputeDiagonalBlockC)
-        ComputeDiagonalBlockC( q->ncam, q->lambda1, q->lambda2, q->jc, q->cmap,
-        q->cmlist, q->di, q->bi, q->vn, q->jc_transpose, q->use_jq, 0);
-    END_THREAD_RPOC(ComputeDiagonalBlockC)
-
     void ComputeDiagonalBlockC(size_t ncam,  float lambda1, float lambda2, const double* jc, const int* cmap,
                 const int* cmlist, double* di, double* bi, int vn, bool jc_transpose, bool use_jq, int mt)
     {
         const size_t bc = vn * 8;
 
-        if(mt > 1 && ncam >= (size_t) mt)
-        {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
-            {
-                int first = ncam * i / thread_num;
-                int last_ = ncam * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)ncam);
-                RUN_THREAD(ComputeDiagonalBlockC, threads[i],
-                    (last - first), lambda1, lambda2, jc, cmap + first,
-                     cmlist, di + 8 * first, bi + bc * first, vn, jc_transpose, use_jq);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            double bufv[64 + 8]; //size_t offset = ((size_t)bufv) & 0xf;
-            //Float* pbuf = bufv + ((16 - offset) / sizeof(Float));
-            double* pbuf = (double*)ALIGN_PTR(bufv);
+        double bufv[64 + 8]; //size_t offset = ((size_t)bufv) & 0xf;
+        //Float* pbuf = bufv + ((16 - offset) / sizeof(Float));
+        double* pbuf = (double*)ALIGN_PTR(bufv);
 
 
-            ///////compute jc part
-            for(size_t i = 0; i < ncam; ++i, ++cmap, bi += bc)
+        ///////compute jc part
+        for(size_t i = 0; i < ncam; ++i, ++cmap, bi += bc)
+        {
+            int idx1 = cmap[0], idx2 = cmap[1];
+            //////////////////////////////////////
+            if(idx1 == idx2)
             {
-                int idx1 = cmap[0], idx2 = cmap[1];
-                //////////////////////////////////////
-                if(idx1 == idx2)
+                SetVectorZero(bi, bi + bc);
+            }else
+            {
+                SetVectorZero(pbuf, pbuf + 64);
+
+                for(int j = idx1; j < idx2; ++j)
                 {
-                    SetVectorZero(bi, bi + bc);
+                    int idx = jc_transpose? j : cmlist[j];
+                    const double* pj = jc + idx * 16;
+                    /////////////////////////////////
+                    AddBlockJtJ(pj,     pbuf, vn);
+                    AddBlockJtJ(pj + 8, pbuf, vn);
+                }
+
+                //change and copy the diagonal
+
+                if(use_jq)
+                {
+                    double* pb = pbuf;
+                    for(int j= 0; j < 8; ++j, ++di, pb += 9)
+                    {
+                        double temp;
+                        di[0]  = temp = (di[0] + pb[0]);
+                        pb[0] = lambda2 * temp + lambda1;
+                    }
                 }else
                 {
-                    SetVectorZero(pbuf, pbuf + 64);
-
-                    for(int j = idx1; j < idx2; ++j)
+                    double* pb = pbuf;
+                    for(int j= 0; j < 8; ++j, ++di, pb += 9)
                     {
-                        int idx = jc_transpose? j : cmlist[j];
-                        const double* pj = jc + idx * 16;
-                        /////////////////////////////////
-                        AddBlockJtJ(pj,     pbuf, vn);
-                        AddBlockJtJ(pj + 8, pbuf, vn);
+                        *pb = lambda2 * ((* di) = (*pb)) + lambda1;
                     }
-
-                    //change and copy the diagonal
-
-                    if(use_jq)
-                    {
-                        double* pb = pbuf;
-                        for(int j= 0; j < 8; ++j, ++di, pb += 9)
-                        {
-                            double temp;
-                            di[0]  = temp = (di[0] + pb[0]);
-                            pb[0] = lambda2 * temp + lambda1;
-                        }
-                    }else
-                    {
-                        double* pb = pbuf;
-                        for(int j= 0; j < 8; ++j, ++di, pb += 9)
-                        {
-                            *pb = lambda2 * ((* di) = (*pb)) + lambda1;
-                        }
-                    }
-
-                    //invert the matrix?
-                    if(vn==8)   InvertSymmetricMatrix<double, 8, 8>(pbuf, bi);
-                    else        InvertSymmetricMatrix<double, 7, 8>(pbuf, bi);
                 }
+
+                //invert the matrix?
+                if(vn==8)   InvertSymmetricMatrix<double, 8, 8>(pbuf, bi);
+                else        InvertSymmetricMatrix<double, 7, 8>(pbuf, bi);
             }
         }
     }
-
-    // Forward declare.
-    void ComputeDiagonalBlockP(size_t npt, float lambda1, float lambda2,
-                        const double*  jp, const int* pmap, double* di, double* bi, int mt);
-
-    DEFINE_THREAD_DATA(ComputeDiagonalBlockP)
-        size_t npt; float lambda1, lambda2;  const double * jp; const int* pmap; double* di, *bi;
-    BEGIN_THREAD_PROC(ComputeDiagonalBlockP)
-        ComputeDiagonalBlockP( q->npt, q->lambda1, q->lambda2, q->jp, q->pmap, q->di, q->bi, 0);
-    END_THREAD_RPOC(ComputeDiagonalBlockP)
 
     void ComputeDiagonalBlockP(size_t npt, float lambda1, float lambda2,
                         const double*  jp, const int* pmap, double* di, double* bi, int mt)
     {
-        if(mt > 1)
+        for(size_t i = 0; i < npt; ++i, ++pmap, di += POINT_ALIGN, bi += 6)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
+            int idx1 = pmap[0], idx2 = pmap[1];
+
+            double M00 = 0, M01= 0, M02 = 0, M11 = 0, M12 = 0, M22 = 0;
+            const double* jxp = jp + idx1 * (POINT_ALIGN2), * jyp = jxp + POINT_ALIGN;
+            for(int j = idx1; j < idx2; ++j, jxp += POINT_ALIGN2, jyp += POINT_ALIGN2)
             {
-                int first = npt * i / thread_num;
-                int last_ = npt * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)npt);
-                RUN_THREAD(ComputeDiagonalBlockP, threads[i],
-                    (last - first), lambda1, lambda2, jp, pmap + first,
-                    di + POINT_ALIGN * first, bi + 6 * first);
+                M00 += (jxp[0] * jxp[0] + jyp[0] * jyp[0]);
+                M01 += (jxp[0] * jxp[1] + jyp[0] * jyp[1]);
+                M02 += (jxp[0] * jxp[2] + jyp[0] * jyp[2]);
+                M11 += (jxp[1] * jxp[1] + jyp[1] * jyp[1]);
+                M12 += (jxp[1] * jxp[2] + jyp[1] * jyp[2]);
+                M22 += (jxp[2] * jxp[2] + jyp[2] * jyp[2]);
             }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            for(size_t i = 0; i < npt; ++i, ++pmap, di += POINT_ALIGN, bi += 6)
+
+            /////////////////////////////////
+            di[0] = M00;    di[1] = M11;    di[2] = M22;
+
+            /////////////////////////////
+            M00 = M00 * lambda2 + lambda1;
+            M11 = M11 * lambda2 + lambda1;
+            M22 = M22 * lambda2 + lambda1;
+
+            ///////////////////////////////
+            double det = (M00 * M11 - M01 * M01) * M22 + double(2.0) * M01 * M12 * M02 - M02 * M02 * M11 - M12 * M12 * M00;
+            if(det >= FLT_MAX || det <= FLT_MIN * 2.0f)
             {
-                int idx1 = pmap[0], idx2 = pmap[1];
-
-                double M00 = 0, M01= 0, M02 = 0, M11 = 0, M12 = 0, M22 = 0;
-                const double* jxp = jp + idx1 * (POINT_ALIGN2), * jyp = jxp + POINT_ALIGN;
-                for(int j = idx1; j < idx2; ++j, jxp += POINT_ALIGN2, jyp += POINT_ALIGN2)
-                {
-                    M00 += (jxp[0] * jxp[0] + jyp[0] * jyp[0]);
-                    M01 += (jxp[0] * jxp[1] + jyp[0] * jyp[1]);
-                    M02 += (jxp[0] * jxp[2] + jyp[0] * jyp[2]);
-                    M11 += (jxp[1] * jxp[1] + jyp[1] * jyp[1]);
-                    M12 += (jxp[1] * jxp[2] + jyp[1] * jyp[2]);
-                    M22 += (jxp[2] * jxp[2] + jyp[2] * jyp[2]);
-                }
-
-                /////////////////////////////////
-                di[0] = M00;    di[1] = M11;    di[2] = M22;
-
-                /////////////////////////////
-                M00 = M00 * lambda2 + lambda1;
-                M11 = M11 * lambda2 + lambda1;
-                M22 = M22 * lambda2 + lambda1;
-
-                ///////////////////////////////
-                double det = (M00 * M11 - M01 * M01) * M22 + double(2.0) * M01 * M12 * M02 - M02 * M02 * M11 - M12 * M12 * M00;
-                if(det >= FLT_MAX || det <= FLT_MIN * 2.0f)
-                {
-                    //SetVectorZero(bi, bi + 6);
-                    for(int j = 0; j < 6; ++j) bi[j] = 0;
-                }else
-                {
-                    bi[0] =  ( M11 * M22 - M12 * M12) / det;
-                    bi[1] = -( M01 * M22 - M12 * M02) / det;
-                    bi[2] =  ( M01 * M12 - M02 * M11) / det;
-                    bi[3] =  ( M00 * M22 - M02 * M02) / det;
-                    bi[4] = -( M00 * M12 - M01 * M02) / det;
-                    bi[5] =  ( M00 * M11 - M01 * M01) / det;
-                }
+                //SetVectorZero(bi, bi + 6);
+                for(int j = 0; j < 6; ++j) bi[j] = 0;
+            }else
+            {
+                bi[0] =  ( M11 * M22 - M12 * M12) / det;
+                bi[1] = -( M01 * M22 - M12 * M02) / det;
+                bi[2] =  ( M01 * M12 - M02 * M11) / det;
+                bi[3] =  ( M00 * M22 - M02 * M02) / det;
+                bi[4] = -( M00 * M12 - M01 * M02) / det;
+                bi[5] =  ( M00 * M11 - M01 * M01) / det;
             }
         }
     }
 
-    template<class Float>
-    void ComputeDiagonalBlock(size_t ncam, size_t npts, float lambda, bool dampd, const Float* jc, const int* cmap,
-                const Float*  jp, const int* pmap, const int* cmlist,
-                const Float*  sj, const Float* wq, Float* diag, Float* blocks,
+    void ComputeDiagonalBlock(size_t ncam, size_t npts, float lambda, bool dampd, const double* jc, const int* cmap,
+                const double*  jp, const int* pmap, const int* cmlist,
+                const double*  sj, const double* wq, double* diag, double* blocks,
                 int radial_distortion, bool jc_transpose, int mt1 = 2, int mt2 = 2, int mode = 0)
     {
         const int    vn = radial_distortion? 8 : 7;
@@ -1963,82 +1090,30 @@ namespace ProgramCPU
         }
     }
 
-    // Forward declare
-    template<class Float>
-    void MultiplyBlockConditionerC(int ncam, const Float* bi, const Float*  x, Float* vx, int vn, int mt = 0);
 
-    DEFINE_THREAD_DATA(MultiplyBlockConditionerC)
-        int ncam;  const double * bi, * x;  double * vx; int vn;
-    BEGIN_THREAD_PROC(MultiplyBlockConditionerC)
-        MultiplyBlockConditionerC(q->ncam, q->bi, q->x, q->vx, q->vn, 0);
-    END_THREAD_RPOC(MultiplyBlockConditionerC)
-
-    template<class Float>
-    void MultiplyBlockConditionerC(int ncam, const Float* bi, const Float*  x, Float* vx, int vn, int mt)
+    void MultiplyBlockConditionerC(int ncam, const double* bi, const double*  x, double* vx, int vn, int mt = 0)
     {
-        if(mt > 1 && ncam >= mt)
+        for(int i = 0; i < ncam; ++i, x += 8, vx += 8)
         {
-            const size_t bc = vn * 8;
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
-            {
-                int first = ncam * i / thread_num;
-                int last_ = ncam * (i + 1) / thread_num;
-                int last  = std::min(last_, ncam);
-                RUN_THREAD(MultiplyBlockConditionerC, threads[i],
-                    (last - first), bi + first * bc, x + 8 *first, vx + 8 * first, vn);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            for(int i = 0; i < ncam; ++i, x += 8, vx += 8)
-            {
-                Float *vxc = vx;
-                for(int j = 0; j < vn; ++j, bi += 8, ++vxc)  *vxc = DotProduct8(bi, x);
-            }
+            double *vxc = vx;
+            for(int j = 0; j < vn; ++j, bi += 8, ++vxc)  *vxc = DotProduct8(bi, x);
         }
     }
 
-    template<class Float>
-    void MultiplyBlockConditionerP(int npoint, const Float* bi, const Float*  x, Float* vx, int mt = 0);
 
-    DEFINE_THREAD_DATA(MultiplyBlockConditionerP)
-        int npoint;  const double * bi, * x;  double * vx;
-    BEGIN_THREAD_PROC(MultiplyBlockConditionerP)
-        MultiplyBlockConditionerP(q->npoint, q->bi, q->x, q->vx, 0);
-    END_THREAD_RPOC(MultiplyBlockConditionerP)
-
-    template<class Float>
-    void MultiplyBlockConditionerP(int npoint, const Float* bi, const Float*  x, Float* vx, int mt)
+    void MultiplyBlockConditionerP(int npoint, const double* bi, const double*  x, double* vx, int mt = 0)
     {
-        if(mt > 1 && npoint >= mt)
+        for(int i = 0; i < npoint; ++i, bi += 6, x += POINT_ALIGN, vx += POINT_ALIGN)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
-            {
-                int first = npoint * i / thread_num;
-                int last_ = npoint * (i + 1) / thread_num;
-                int last  = std::min(last_, npoint);
-                RUN_THREAD(MultiplyBlockConditionerP, threads[i],
-                    (last - first), bi + first * 6, x + POINT_ALIGN *first, vx + POINT_ALIGN * first);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            for(int i = 0; i < npoint; ++i, bi += 6, x += POINT_ALIGN, vx += POINT_ALIGN)
-            {
-                vx[0] = (bi[0] * x[0] + bi[1] * x[1] + bi[2] * x[2]);
-                vx[1] = (bi[1] * x[0] + bi[3] * x[1] + bi[4] * x[2]);
-                vx[2] = (bi[2] * x[0] + bi[4] * x[1] + bi[5] * x[2]);
-            }
+            vx[0] = (bi[0] * x[0] + bi[1] * x[1] + bi[2] * x[2]);
+            vx[1] = (bi[1] * x[0] + bi[3] * x[1] + bi[4] * x[2]);
+            vx[2] = (bi[2] * x[0] + bi[4] * x[1] + bi[5] * x[2]);
         }
     }
 
-    template<class Float>
-    void MultiplyBlockConditioner(int ncam, int npoint, const Float* blocksv,
-                                  const Float*  vec, Float* resultv, int radial, int mode,  int mt1, int mt2)
+
+    void MultiplyBlockConditioner(int ncam, int npoint, const double* blocksv,
+                                  const double*  vec, double* resultv, int radial, int mode,  int mt1, int mt2)
     {
         const int vn = radial ? 8 : 7;
         if(mode != 2) MultiplyBlockConditionerC(ncam, blocksv, vec, resultv, vn, mt1);
@@ -2048,39 +1123,13 @@ namespace ProgramCPU
 
     ////////////////////////////////////////////////////
 
-    // Forward declare.
-    template<class Float>
-    void ComputeJX( size_t nproj, size_t ncam,  const Float* x, const Float*  jc,
-                    const Float* jp, const int* jmap, Float* jx, int mode, int mt = 2);
 
-
-    DEFINE_THREAD_DATA(ComputeJX)
-        size_t nproj, ncam; const double* xc, *jc,* jp; const int* jmap; double* jx; int mode;
-    BEGIN_THREAD_PROC(ComputeJX)
-        ComputeJX(q->nproj, q->ncam, q->xc, q->jc, q->jp, q->jmap, q->jx, q->mode, 0);
-    END_THREAD_RPOC(ComputeJX)
-
-    template<class Float>
-    void ComputeJX( size_t nproj, size_t ncam,  const Float* x, const Float*  jc,
-                    const Float* jp, const int* jmap, Float* jx, int mode, int mt )
+    void ComputeJX( size_t nproj, size_t ncam,  const double* x, const double*  jc,
+                    const double* jp, const int* jmap, double* jx, int mode, int mt = 2)
     {
-        if(mt > 1 && nproj >= static_cast<std::size_t>(mt))
+        if(mode == 0)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
-            {
-                size_t first = nproj * i / thread_num;
-                size_t last_ = nproj * (i + 1) / thread_num;
-                size_t last  = std::min(last_, nproj);
-                RUN_THREAD( ComputeJX, threads[i], (last - first), ncam, x,
-                            jc + 16 * first, jp + POINT_ALIGN2 * first,
-                            jmap + first *2, jx + first* 2, mode);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else if(mode == 0)
-        {
-            const Float* pxc = x, * pxp = pxc + ncam * 8;
+            const double* pxc = x, * pxp = pxc + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
             for(size_t i = 0 ;i < nproj; ++i, jmap += 2, jc += 16, jp += POINT_ALIGN2, jx += 2)
             {
@@ -2088,61 +1137,32 @@ namespace ProgramCPU
             }
         }else if(mode == 1)
         {
-            const Float* pxc = x;
+            const double* pxc = x;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
             for(size_t i = 0 ;i < nproj; ++i, jmap += 2, jc += 16, jp += POINT_ALIGN2, jx += 2)
             {
-                const Float* xc = pxc + jmap[0] * 8;
+                const double* xc = pxc + jmap[0] * 8;
                 jx[0] = DotProduct8(jc, xc)   ;
                 jx[1] = DotProduct8(jc + 8, xc);
             }
         }else if(mode == 2)
         {
-            const Float* pxp = x + ncam * 8;
+            const double* pxp = x + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
             for(size_t i = 0 ;i < nproj; ++i, jmap += 2, jc += 16, jp += POINT_ALIGN2, jx += 2)
             {
-                const Float* xp = pxp + jmap[1] * POINT_ALIGN;
+                const double* xp = pxp + jmap[1] * POINT_ALIGN;
                 jx[0] =  (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
                 jx[1] =  (jp[3] * xp[0] + jp[4] * xp[1] + jp[5] * xp[2]);
             }
         }
     }
 
-    // Forward declare.
-    void ComputeJX_(size_t nproj, size_t ncam,  const double* x, double* jx, const double* camera,
-                    const double* point,  const double* ms, const double* sj, const int*  jmap,
-                    bool intrinsic_fixed, int radial_distortion, int mode, int mt);
-
-    DEFINE_THREAD_DATA(ComputeJX_)
-           size_t nproj, ncam; const double* x; double * jx;
-            const double* camera, *point,* ms, *sj; const int *jmap;
-            bool intrinsic_fixed; int radial_distortion; int mode;
-    BEGIN_THREAD_PROC(ComputeJX_)
-        ComputeJX_( q->nproj, q->ncam, q->x, q->jx, q->camera, q->point, q->ms, q->sj,
-                    q->jmap, q->intrinsic_fixed, q->radial_distortion, q->mode, 0);
-    END_THREAD_RPOC(ComputeJX_)
-
     void ComputeJX_(size_t nproj, size_t ncam,  const double* x, double* jx, const double* camera,
                     const double* point,  const double* ms, const double* sj, const int*  jmap,
                     bool intrinsic_fixed, int radial_distortion, int mode, int mt = 16)
     {
-        if(mt > 1 && nproj >= static_cast<std::size_t>(mt))
-        {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for (int i = 0; i < thread_num; ++i)
-            {
-                size_t first = nproj * i / thread_num;
-                size_t last_ = nproj * (i + 1) / thread_num;
-                size_t last  = std::min(last_, nproj);
-                RUN_THREAD(ComputeJX_, threads[i],
-                    (last - first), ncam, x, jx + first * 2,
-                    camera, point, ms + 2 * first, sj, jmap + first * 2,
-                    intrinsic_fixed, radial_distortion, mode);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else if(mode == 0)
+        if(mode == 0)
         {
             double jcv[24 + 8]; //size_t offset = ((size_t) jcv) & 0xf;
             //Float* jc = jcv + (16 - offset) / sizeof(Float), *jp = jc + 16;
@@ -2221,107 +1241,52 @@ namespace ProgramCPU
         }
     }
 
-    // Forward declare.
-    template<class Float>
-    void ComputeJtEC(    size_t ncam, const Float* pe, const Float* jc, const int* cmap,
-                        const int* cmlist,  Float* v, bool jc_transpose, int mt);
 
-    DEFINE_THREAD_DATA(ComputeJtEC)
-        size_t ncam; const double* pe, * jc; const int* cmap,* cmlist;  double* v;bool jc_transpose;
-    BEGIN_THREAD_PROC(ComputeJtEC)
-        ComputeJtEC( q->ncam, q->pe, q->jc, q->cmap, q->cmlist, q->v, q->jc_transpose, 0);
-    END_THREAD_RPOC(ComputeJtEC)
-
-    template<class Float>
-    void ComputeJtEC(    size_t ncam, const Float* pe, const Float* jc, const int* cmap,
-                        const int* cmlist,  Float* v, bool jc_transpose, int mt)
+    void ComputeJtEC(    size_t ncam, const double* pe, const double* jc, const int* cmap,
+                        const int* cmlist,  double* v, bool jc_transpose, int mt)
     {
-        if(mt > 1 && ncam >= static_cast<size_t>(mt))
+        /////////////////////////////////
+        for(size_t i = 0; i < ncam; ++i, ++cmap, v += 8)
         {
-            MYTHREAD threads[THREAD_NUM_MAX]; //if(ncam < mt) mt = ncam;
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
+            int idx1 = cmap[0], idx2 = cmap[1];
+            for(int j = idx1; j < idx2; ++j)
             {
-                int first = ncam * i / thread_num;
-                int last_ = ncam * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)ncam);
-                RUN_THREAD(ComputeJtEC, threads[i],
-                    (last - first), pe, jc, cmap + first, cmlist,
-                    v + 8 * first, jc_transpose);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            /////////////////////////////////
-            for(size_t i = 0; i < ncam; ++i, ++cmap, v += 8)
-            {
-                int idx1 = cmap[0], idx2 = cmap[1];
-                for(int j = idx1; j < idx2; ++j)
-                {
-                    int edx = cmlist[j];
-                    const Float* pj = jc +  ((jc_transpose? j : edx) * 16);
-                    const Float* e  = pe + edx * 2;
-                    //////////////////////////////
-                    AddScaledVec8(e[0], pj,     v);
-                    AddScaledVec8(e[1], pj + 8, v);
-                }
-            }
-        }
-    }
-
-    // Forward declare.
-    template<class Float>
-    void ComputeJtEP(   size_t npt, const Float* pe, const Float* jp,
-                        const int* pmap, Float* v,  int mt);
-
-    DEFINE_THREAD_DATA(ComputeJtEP)
-        size_t npt; const double* pe, * jp; const int* pmap; double* v;
-    BEGIN_THREAD_PROC(ComputeJtEP)
-        ComputeJtEP( q->npt, q->pe, q->jp, q->pmap, q->v, 0);
-    END_THREAD_RPOC(ComputeJtEP)
-
-    template<class Float>
-    void ComputeJtEP(   size_t npt, const Float* pe, const Float* jp,
-                        const int* pmap, Float* v,  int mt)
-    {
-        if(mt > 1 && npt >= static_cast<size_t>(mt))
-        {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
-            {
-                int first = npt * i / thread_num;
-                int last_ = npt * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)npt);
-                RUN_THREAD(ComputeJtEP, threads[i],
-                    (last - first), pe, jp, pmap + first, v + POINT_ALIGN * first);
-            }
-            WAIT_THREAD(threads, thread_num);
-        }else
-        {
-            for(size_t i = 0; i < npt; ++i, ++pmap, v += POINT_ALIGN)
-            {
-                int idx1 = pmap[0], idx2 = pmap[1];
-                const Float* pj = jp + idx1 * POINT_ALIGN2;
-                const Float* e  = pe + idx1 * 2;
-                Float temp[3] = {0, 0, 0};
-                for(int j = idx1; j < idx2; ++j, pj += POINT_ALIGN2, e += 2)
-                {
-                    temp[0] += (e[0] * pj[0] + e[1] * pj[POINT_ALIGN]);
-                    temp[1] += (e[0] * pj[1] + e[1] * pj[POINT_ALIGN + 1]);
-                    temp[2] += (e[0] * pj[2] + e[1] * pj[POINT_ALIGN + 2]);
-                }
-                v[0] = temp[0]; v[1] = temp[1]; v[2] = temp[2];
+                int edx = cmlist[j];
+                const double* pj = jc +  ((jc_transpose? j : edx) * 16);
+                const double* e  = pe + edx * 2;
+                //////////////////////////////
+                AddScaledVec8(e[0], pj,     v);
+                AddScaledVec8(e[1], pj + 8, v);
             }
         }
     }
 
 
+    void ComputeJtEP(   size_t npt, const double* pe, const double* jp,
+                        const int* pmap, double* v,  int mt)
+    {
+        for(size_t i = 0; i < npt; ++i, ++pmap, v += POINT_ALIGN)
+        {
+            int idx1 = pmap[0], idx2 = pmap[1];
+            const double* pj = jp + idx1 * POINT_ALIGN2;
+            const double* e  = pe + idx1 * 2;
+            double temp[3] = {0, 0, 0};
+            for(int j = idx1; j < idx2; ++j, pj += POINT_ALIGN2, e += 2)
+            {
+                temp[0] += (e[0] * pj[0] + e[1] * pj[POINT_ALIGN]);
+                temp[1] += (e[0] * pj[1] + e[1] * pj[POINT_ALIGN + 1]);
+                temp[2] += (e[0] * pj[2] + e[1] * pj[POINT_ALIGN + 2]);
+            }
+            v[0] = temp[0]; v[1] = temp[1]; v[2] = temp[2];
+        }
+    }
 
-    template<class Float>
-    void ComputeJtE(    size_t ncam, size_t npt, const Float* pe, const Float* jc,
-                        const int* cmap, const int* cmlist,  const Float* jp,
-                        const int* pmap, Float* v, bool jc_transpose, int mode, int mt1, int mt2)
+
+
+
+    void ComputeJtE(    size_t ncam, size_t npt, const double* pe, const double* jc,
+                        const int* cmap, const int* cmlist,  const double* jp,
+                        const int* pmap, double* v, bool jc_transpose, int mode, int mt1, int mt2)
     {
         if(mode != 2)
         {
@@ -2334,74 +1299,40 @@ namespace ProgramCPU
         }
     }
 
-    // Forward declare.
-    template<class Float>
-    void ComputeJtEC_(  size_t ncam, const Float* ee,  Float* jte,
-                        const Float* c, const Float* point, const Float* ms,
-                        const int* jmap, const int* cmap, const int * cmlist,
-                        bool intrinsic_fixed, int radial_distortion, int mt);
 
-    DEFINE_THREAD_DATA(ComputeJtEC_)
-           size_t ncam; const double* ee; double * jte; const double* c, *point,* ms;
-           const int *jmap, *cmap, *cmlist; bool intrinsic_fixed; int radial_distortion;
-    BEGIN_THREAD_PROC(ComputeJtEC_)
-        ComputeJtEC_(q->ncam, q->ee, q->jte, q->c, q->point, q->ms, q->jmap, q->cmap,
-                     q->cmlist, q->intrinsic_fixed, q->radial_distortion, 0);
-    END_THREAD_RPOC(ComputeJtEC_)
-
-    template<class Float>
-    void ComputeJtEC_(  size_t ncam, const Float* ee,  Float* jte,
-                        const Float* c, const Float* point, const Float* ms,
+    void ComputeJtEC_(  size_t ncam, const double* ee,  double* jte,
+                        const double* c, const double* point, const double* ms,
                         const int* jmap, const int* cmap, const int * cmlist,
                         bool intrinsic_fixed, int radial_distortion, int mt)
     {
-        if(mt > 1 && ncam >= static_cast<std::size_t>(mt))
+        /////////////////////////////////
+        double jcv[16 + 8];          //size_t offset = ((size_t) jcv) & 0xf;
+        //Float* jcx = jcv + ((16 - offset) / sizeof(Float)), * jcy = jcx + 8;
+        double* jcx = (double*)ALIGN_PTR(jcv), * jcy = jcx + 8;
+
+        for(size_t i = 0; i < ncam; ++i, ++cmap, jte += 8, c += 16)
         {
-            MYTHREAD threads[THREAD_NUM_MAX];
-            //if(ncam < mt) mt = ncam;
-            const int thread_num = std::min(mt, THREAD_NUM_MAX);
-            for(int i = 0; i < thread_num; ++i)
+            int idx1 = cmap[0], idx2 = cmap[1];
+
+            for(int j = idx1; j < idx2; ++j)
             {
-                int first = ncam * i / thread_num;
-                int last_ = ncam * (i + 1) / thread_num;
-                int last  = std::min(last_, (int)ncam);
-                RUN_THREAD(ComputeJtEC_, threads[i],
-                    (last - first), ee, jte + 8 * first, c + first * 16, point, ms, jmap,
-                    cmap + first, cmlist, intrinsic_fixed, radial_distortion);
-            }
-            WAIT_THREAD(threads, thread_num);
+                int index = cmlist[j];
+                const double* pt = point + jmap[2 * index + 1] * POINT_ALIGN;
+                const double* e  = ee + index * 2;
 
-        }else
-        {
-            /////////////////////////////////
-            Float jcv[16 + 8];          //size_t offset = ((size_t) jcv) & 0xf;
-            //Float* jcx = jcv + ((16 - offset) / sizeof(Float)), * jcy = jcx + 8;
-            Float* jcx = (Float*)ALIGN_PTR(jcv), * jcy = jcx + 8;
+                JacobianOne(c, pt, ms + index * 2, jcx, jcy, (double*)NULL, (double*)NULL, intrinsic_fixed, radial_distortion);
 
-            for(size_t i = 0; i < ncam; ++i, ++cmap, jte += 8, c += 16)
-            {
-                int idx1 = cmap[0], idx2 = cmap[1];
-
-                for(int j = idx1; j < idx2; ++j)
-                {
-                    int index = cmlist[j];
-                    const Float* pt = point + jmap[2 * index + 1] * POINT_ALIGN;
-                    const Float* e  = ee + index * 2;
-
-                    JacobianOne(c, pt, ms + index * 2, jcx, jcy, (Float*)NULL, (Float*)NULL, intrinsic_fixed, radial_distortion);
-
-                    //////////////////////////////
-                    AddScaledVec8(e[0], jcx, jte);
-                    AddScaledVec8(e[1], jcy, jte);
-                }
+                //////////////////////////////
+                AddScaledVec8(e[0], jcx, jte);
+                AddScaledVec8(e[1], jcy, jte);
             }
         }
     }
 
-    template<class Float>
-    void ComputeJtE_(   size_t /*nproj*/, size_t ncam, size_t npt, const Float* ee,  Float* jte,
-                        const Float* camera, const Float* point, const Float* ms, const int* jmap,
-                        const int* cmap, const int* cmlist, const int* pmap, const Float* jp,
+
+    void ComputeJtE_(   size_t /*nproj*/, size_t ncam, size_t npt, const double* ee,  double* jte,
+                        const double* camera, const double* point, const double* ms, const int* jmap,
+                        const int* cmap, const int* cmlist, const int* pmap, const double* jp,
                         bool intrinsic_fixed, int radial_distortion, int mode, int mt)
     {
         if(mode != 2)
@@ -2415,22 +1346,22 @@ namespace ProgramCPU
         }
     }
 
-    template<class Float>
-    void ComputeJtE_(   size_t nproj, size_t ncam, size_t npt, const Float* ee,  Float* jte,
-                        const Float* camera, const Float* point, const Float* ms, const int* jmap,
+
+    void ComputeJtE_(   size_t nproj, size_t ncam, size_t npt, const double* ee,  double* jte,
+                        const double* camera, const double* point, const double* ms, const int* jmap,
                         bool intrinsic_fixed, int radial_distortion, int mode)
     {
         SetVectorZero(jte, jte + (ncam * 8 + npt * POINT_ALIGN));
-        Float jcv[24 + 8];  //size_t offset = ((size_t) jcv) & 0xf;
+        double jcv[24 + 8];  //size_t offset = ((size_t) jcv) & 0xf;
         //Float* jc = jcv + (16 - offset) / sizeof(Float), *pj = jc + 16;
-        Float* jc = (Float*)ALIGN_PTR(jcv), *pj = jc + 16;
+        double* jc = (double*)ALIGN_PTR(jcv), *pj = jc + 16;
 
-        Float* vc0 = jte, *vp0 = jte + ncam * 8;
+        double* vc0 = jte, *vp0 = jte + ncam * 8;
 
         for(size_t i = 0 ;i < nproj; ++i, jmap += 2, ms += 2, ee += 2)
         {
             int cidx = jmap[0], pidx = jmap[1];
-            const Float* c = camera + cidx * 16, * pt = point + pidx * POINT_ALIGN;
+            const double* c = camera + cidx * 16, * pt = point + pidx * POINT_ALIGN;
 
             if(mode == 0)
             {
@@ -2438,7 +1369,7 @@ namespace ProgramCPU
                 JacobianOne(c, pt, ms, jc, jc + 8, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
 
                 ////////////////////////////////////////////
-                Float* vc = vc0 + cidx * 8, *vp = vp0 + pidx * POINT_ALIGN;
+                double* vc = vc0 + cidx * 8, *vp = vp0 + pidx * POINT_ALIGN;
                 AddScaledVec8(ee[0], jc,     vc);
                 AddScaledVec8(ee[1], jc + 8, vc);
                 vp[0] += (ee[0] * pj[0] + ee[1] * pj[POINT_ALIGN]);
@@ -2447,19 +1378,19 @@ namespace ProgramCPU
             }else if(mode == 1)
             {
                 /////////////////////////////////////////////////////
-                JacobianOne(c, pt, ms, jc, jc + 8, (Float*) NULL, (Float*) NULL, intrinsic_fixed, radial_distortion);
+                JacobianOne(c, pt, ms, jc, jc + 8, (double*) NULL, (double*) NULL, intrinsic_fixed, radial_distortion);
 
                 ////////////////////////////////////////////
-                Float* vc = vc0 + cidx * 8;
+                double* vc = vc0 + cidx * 8;
                 AddScaledVec8(ee[0], jc,     vc);
                 AddScaledVec8(ee[1], jc + 8, vc);
             }else
             {
                /////////////////////////////////////////////////////
-                JacobianOne(c, pt, ms, (Float*) NULL, (Float*) NULL, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
+                JacobianOne(c, pt, ms, (double*) NULL, (double*) NULL, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
 
                 ////////////////////////////////////////////
-                Float *vp = vp0 + pidx * POINT_ALIGN;
+                double *vp = vp0 + pidx * POINT_ALIGN;
                 vp[0] += (ee[0] * pj[0] + ee[1] * pj[POINT_ALIGN]);
                 vp[1] += (ee[0] * pj[1] + ee[1] * pj[POINT_ALIGN + 1]);
                 vp[2] += (ee[0] * pj[2] + ee[1] * pj[POINT_ALIGN + 2]);
@@ -2483,7 +1414,7 @@ SparseBundleCPU:: SparseBundleCPU()
     , _num_imgpt_q(0)
 {
     __cpu_data_precision = sizeof(double);
-    if(__num_cpu_cores == 0)	__num_cpu_cores = FindProcessorCoreNum();
+    if(__num_cpu_cores == 0)	__num_cpu_cores = omp_get_num_procs();
     if(__verbose_level)			std::cout  << "CPU " << (__cpu_data_precision == 4 ? "single" : "double")
                                            << "-precisoin solver; " << __num_cpu_cores << " cores"
 #ifdef CPUPBA_USE_AVX
@@ -4110,16 +3041,7 @@ void SparseBundleCPU::RunProfileSteps()
 
 int SparseBundleCPU::FindProcessorCoreNum()
 {
-#ifdef _WIN32
-    #if defined(WINAPI_FAMILY) && WINAPI_FAMILY==WINAPI_FAMILY_APP
-    SYSTEM_INFO sysinfo;	GetNativeSystemInfo( &sysinfo );
-    #else
-    SYSTEM_INFO sysinfo;	GetSystemInfo( &sysinfo );
-    #endif
-    return sysinfo.dwNumberOfProcessors;
-#else
-    return sysconf( _SC_NPROCESSORS_ONLN );
-#endif
+    return omp_get_num_procs();
 }
 
 SFM_PBA_NAMESPACE_END

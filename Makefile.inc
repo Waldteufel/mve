@@ -1,6 +1,8 @@
 # Default values.
 CXX ?= g++
-CXXFLAGS ?= -Wall -Wextra -Wundef -pedantic -g -O3
+AR = gcc-ar
+SSE_FLAGS = -march=native
+CXXFLAGS ?= -Wall -Wextra -Wundef -pedantic -g -O3 -march=native -fno-math-errno -flto -pipe
 
 # Delete this if libgomp.a is not installed! (e.g., OS X without gcc)
 OPENMP ?= -fopenmp
@@ -14,6 +16,8 @@ ifeq (${UNAME},Darwin)
     CXXFLAGS += -mmacosx-version-min=10.6
     LDFLAGS += -mmacosx-version-min=10.6
 endif
+
+LDFLAGS += ${CXXFLAGS}
 
 COMPILE.cc = ${CXX} ${CXXFLAGS} ${CPPFLAGS} -c
 LINK.o = ${CXX} ${LDFLAGS}
