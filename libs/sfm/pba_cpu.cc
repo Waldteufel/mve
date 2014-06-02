@@ -58,7 +58,7 @@ namespace ProgramCPU
     {
         double* v = vec.begin();
         std::size_t len = vec.size();
-#pragma omp parallel for
+//#pragma omp parallel for
         for (std::size_t i = 0; i < len; ++i)
             v[i] = std::sqrt(v[i]);
     }
@@ -67,7 +67,7 @@ namespace ProgramCPU
     {
         double* v = vec.begin();
         std::size_t len = vec.size();
-#pragma omp parallel for
+//#pragma omp parallel for
         for (std::size_t i = 0; i < len; ++i)
             v[i] = v[i] == 0.0 ? 0.0 : 1/std::sqrt(v[i]);
     }
@@ -86,7 +86,7 @@ namespace ProgramCPU
         double const* w = weight.begin();
         double sum = 0.0;
         std::size_t len = vec.size();
-#pragma omp parallel for reduction(+:sum)
+//#pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * w[i] * v[i];
         return sum;
@@ -98,7 +98,7 @@ namespace ProgramCPU
         double const* w = vec2.begin();
         double sum = 0.0;
         std::size_t len = vec1.size();
-#pragma omp parallel for reduction(+:sum)
+//#pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * w[i];
         return sum;
@@ -109,7 +109,7 @@ namespace ProgramCPU
         double const* v = vec.begin();
         double sum = 0.0;
         std::size_t len = vec.size();
-#pragma omp parallel for reduction(+:sum)
+//#pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * v[i];
         return sum;
@@ -121,7 +121,7 @@ namespace ProgramCPU
         const double*  ite = part ? (it1 + part) : vec1.end();
         double* it3 = result.begin() + skip;
         size_t n = ite - it1;
-#pragma omp parallel for
+//#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              it3[i] = it1[i] * it2[i];
     }
@@ -140,7 +140,7 @@ namespace ProgramCPU
     {
         const double*  it1 = vec1.begin();
         double* it3 = result.begin();
-#pragma omp parallel for
+//#pragma omp parallel for
         for(std::size_t i = 0; i < vec1.size(); ++i)
              it3[i] = a * it1[i];
     }
@@ -148,7 +148,7 @@ namespace ProgramCPU
     inline void   ComputeSXYPZ(double a, const double* p1, const double* p2, const double* p3, double* p4, double* pe)
     {
         std::size_t n = pe - p4;
-#pragma omp parallel for
+//#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              p4[i] = a * p1[i] * p2[i] + p3[i];
     }
@@ -156,7 +156,7 @@ namespace ProgramCPU
     void   ComputeSAXPY(double a, const double* it1, const double* it2, double* it3, double* ite)
     {
         std::size_t n = ite - it3;
-#pragma omp parallel for
+//#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              it3[i] = a * it1[i] + it2[i];
     }
