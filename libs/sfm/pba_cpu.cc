@@ -83,6 +83,7 @@ namespace ProgramCPU
         double const* w = weight.begin();
         double sum = 0.0;
         std::size_t len = vec.size();
+        // auto-vectorized
 //#pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * w[i] * v[i];
@@ -95,6 +96,7 @@ namespace ProgramCPU
         double const* w = vec2.begin();
         double sum = 0.0;
         std::size_t len = vec1.size();
+        // auto-vectorized
 //#pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * w[i];
@@ -106,6 +108,7 @@ namespace ProgramCPU
         double const* v = vec.begin();
         double sum = 0.0;
         std::size_t len = vec.size();
+        // auto-vectorized
 #pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * v[i];
@@ -184,15 +187,13 @@ namespace ProgramCPU
             jx[1] = DotProduct8(jc + 8, xc) + (jp[3] * xp[0] + jp[4] * xp[1] + jp[5] * xp[2]);
     }
 
+    __attribute__((optimize("finite-math-only")))
     double  ComputeVectorMax(const avec& vec)
     {
         double v = 0;
-        const double* it = vec.begin();
-        for(; it < vec.end(); ++it)
-        {
-            double vi = (double)fabs(*it);
-            v = std::max(v,  vi);
-        }
+        // auto-vectorized with -ffinite-math-only
+        for (std::size_t i = 0; i < vec.size(); ++i)
+            v = std::max(v, std::abs(vec[i]));
         return v;
     }
 
@@ -1111,6 +1112,7 @@ namespace ProgramCPU
 
     void MultiplyBlockConditionerP(int npoint, const double* bi, const double*  x, double* vx, int mt = 0)
     {
+        // check this!
         for(int i = 0; i < npoint; ++i, bi += 6, x += POINT_ALIGN, vx += POINT_ALIGN)
         {
             vx[0] = (bi[0] * x[0] + bi[1] * x[1] + bi[2] * x[2]);
