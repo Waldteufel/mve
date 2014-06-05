@@ -314,11 +314,13 @@ namespace ProgramCPU
 
     void UpdateCamera(int ncam, const avec& camera, const avec& delta, avec& new_camera)
     {
-        const double * c = &camera[0], * d = &delta[0];
-        double * nc = &new_camera[0], m[9];
         //f[1], t[3], r[3][3], d[1]
-        for(int i = 0; i < ncam; ++i, c += 16, d += 8, nc += 16)
+//#pragma omp parallel for
+        for(int i = 0; i < ncam; ++i)
         {
+            const double * c = &camera[16*i], * d = &delta[8*i];
+            double * nc = &new_camera[16*i], m[9];
+
             nc[0]  = std::max(c[0] + d[0], ((double)1e-10));
             nc[1]  = c[1] + d[1];
             nc[2]  = c[2] + d[2];
@@ -364,10 +366,11 @@ namespace ProgramCPU
     void ComputeProjection(size_t nproj, const double* camera, const double* point, const double* ms,
                            const int * jmap, double* pj, int radial, int mt)
     {
-        for(size_t i = 0; i < nproj; ++i, jmap += 2, ms += 2, pj += 2)
+//#pragma omp parallel for
+        for(size_t i = 0; i < nproj; ++i)
         {
-            const double* c = camera + jmap[0] * 16;
-            const double* m = point + jmap[1] * POINT_ALIGN;
+            const double* c = camera + jmap[2*i] * 16;
+            const double* m = point + jmap[2*i+1] * POINT_ALIGN;
             /////////////////////////////////////////////////////
             double p0 = c[4 ]*m[0]+c[5 ]*m[1]+c[6 ]*m[2] + c[1];
             double p1 = c[7 ]*m[0]+c[8 ]*m[1]+c[9 ]*m[2] + c[2];
@@ -377,18 +380,18 @@ namespace ProgramCPU
             {
                 double rr = double(1.0)  + c[13] * (p0 * p0 + p1 * p1) / (p2 * p2);
                 double f_p2 = c[0] * rr / p2;
-                pj[0] = ms[0] - p0 * f_p2;
-                pj[1] = ms[1] - p1 * f_p2;
+                pj[2*i] = ms[2*i] - p0 * f_p2;
+                pj[2*i+1] = ms[2*i+1] - p1 * f_p2;
             }else if(radial == -1)
             {
                 double f_p2 = c[0] / p2;
-                double  rd = double(1.0) + c[13] * (ms[0] * ms[0] + ms[1] * ms[1]) ;
-                pj[0] = ms[0] * rd  - p0 * f_p2;
-                pj[1] = ms[1] * rd  - p1 * f_p2;
+                double  rd = double(1.0) + c[13] * (ms[2*i] * ms[2*i] + ms[2*i+1] * ms[2*i+1]) ;
+                pj[2*i] = ms[2*i] * rd  - p0 * f_p2;
+                pj[2*i+1] = ms[2*i+1] * rd  - p1 * f_p2;
             }else
             {
-                pj[0] = ms[0] - p0 * c[0] / p2;
-                pj[1] = ms[1] - p1 * c[0] / p2;
+                pj[2*i] = ms[2*i] - p0 * c[0] / p2;
+                pj[2*i+1] = ms[2*i+1] - p1 * c[0] / p2;
             }
         }
     }
@@ -396,10 +399,11 @@ namespace ProgramCPU
     void ComputeProjectionX(size_t nproj, const double* camera, const double* point, const double* ms,
                            const int * jmap, double* pj, int radial, int mt)
     {
-        for(size_t i = 0; i < nproj; ++i, jmap += 2, ms += 2, pj += 2)
+//#pragma omp parallel for
+        for(size_t i = 0; i < nproj; ++i)
         {
-            const double* c = camera + jmap[0] * 16;
-            const double* m = point + jmap[1] * POINT_ALIGN;
+            const double* c = camera + jmap[2*i] * 16;
+            const double* m = point + jmap[2*i+1] * POINT_ALIGN;
             /////////////////////////////////////////////////////
             double p0 = c[4 ]*m[0]+c[5 ]*m[1]+c[6 ]*m[2] + c[1];
             double p1 = c[7 ]*m[0]+c[8 ]*m[1]+c[9 ]*m[2] + c[2];
@@ -408,30 +412,31 @@ namespace ProgramCPU
             {
                 double rr = double(1.0)  + c[13] * (p0 * p0 + p1 * p1) / (p2 * p2);
                 double f_p2 = c[0] / p2;
-                pj[0] = ms[0] / rr - p0 * f_p2;
-                pj[1] = ms[1] / rr - p1 * f_p2;
+                pj[2*i] = ms[2*i] / rr - p0 * f_p2;
+                pj[2*i+1] = ms[2*i+1] / rr - p1 * f_p2;
             }else if(radial == -1)
             {
-                double  rd = double(1.0) + c[13] * (ms[0] * ms[0] + ms[1] * ms[1]) ;
+                double  rd = double(1.0) + c[13] * (ms[2*i] * ms[2*i] + ms[2*i+1] * ms[2*i+1]) ;
                 double f_p2 = c[0] / p2 / rd;
-                pj[0] = ms[0]  - p0 * f_p2;
-                pj[1] = ms[1]  - p1 * f_p2;
+                pj[2*i] = ms[2*i]  - p0 * f_p2;
+                pj[2*i+1] = ms[2*i+1]  - p1 * f_p2;
             }else
             {
-                pj[0] = ms[0] - p0 * c[0] / p2;
-                pj[1] = ms[1] - p1 * c[0] / p2;
+                pj[2*i] = ms[2*i] - p0 * c[0] / p2;
+                pj[2*i+1] = ms[2*i+1] - p1 * c[0] / p2;
             }
         }
     }
 
     void ComputeProjectionQ(size_t nq, const double* camera,const int * qmap,  const double* wq, double* pj)
     {
-        for(size_t i = 0;i < nq; ++i, qmap += 2, pj += 2, wq += 2)
+//#pragma omp parallel for
+        for(size_t i = 0;i < nq; ++i)
         {
-            const double* c1 = camera + qmap[0] * 16;
-            const double* c2 = camera + qmap[1] * 16;
-            pj[0] = - (c1[ 0] - c2[ 0]) * wq[0];
-            pj[1] = - (c1[13] - c2[13]) * wq[1];
+            const double* c1 = camera + qmap[2*i] * 16;
+            const double* c2 = camera + qmap[2*i+1] * 16;
+            pj[2*i] = - (c1[ 0] - c2[ 0]) * wq[2*i];
+            pj[2*i+1] = - (c1[13] - c2[13]) * wq[2*i+1];
         }
     }
 
@@ -439,24 +444,26 @@ namespace ProgramCPU
     {
         if(sj)
         {
-            for(size_t i = 0;i < nq; ++i, qmap += 2, jx += 2, wq += 2)
+//#pragma omp parallel for
+            for(size_t i = 0;i < nq; ++i)
             {
-                int idx1 = qmap[0] * 8, idx2 = qmap[1] * 8;
+                int idx1 = qmap[2*i] * 8, idx2 = qmap[2*i+1] * 8;
                 const double* x1 = x + idx1;
                 const double* x2 = x + idx2;
                 const double* sj1 = sj + idx1;
                 const double* sj2 = sj + idx2;
-                jx[0] = (x1[0] * sj1[0] - x2[0] * sj2[0]) * wq[0];
-                jx[1] = (x1[7] * sj1[7] - x2[7] * sj2[7]) * wq[1];
+                jx[2*i] = (x1[0] * sj1[0] - x2[0] * sj2[0]) * wq[2*i];
+                jx[2*i+1] = (x1[7] * sj1[7] - x2[7] * sj2[7]) * wq[2*i+1];
             }
         }else
         {
-            for(size_t i = 0;i < nq; ++i, qmap += 2, jx += 2, wq += 2)
+//#pragma omp parallel for
+            for(size_t i = 0;i < nq; ++i)
             {
-                const double* x1 = x + qmap[0] * 8;
-                const double* x2 = x + qmap[1] * 8;
-                jx[0] = (x1[0] - x2[0]) * wq[0];
-                jx[1] = (x1[7] - x2[7]) * wq[1];
+                const double* x1 = x + qmap[2*i] * 8;
+                const double* x2 = x + qmap[2*i+1] * 8;
+                jx[2*i] = (x1[0] - x2[0]) * wq[2*i];
+                jx[2*i+1] = (x1[7] - x2[7]) * wq[2*i+1];
             }
         }
     }
@@ -1265,9 +1272,10 @@ namespace ProgramCPU
     void ComputeJtEP(   size_t npt, const double* pe, const double* jp,
                         const int* pmap, double* v,  int mt)
     {
-        for(size_t i = 0; i < npt; ++i, ++pmap, v += POINT_ALIGN)
+//#pragma omp parallel for
+        for(size_t i = 0; i < npt; ++i)
         {
-            int idx1 = pmap[0], idx2 = pmap[1];
+            int idx1 = pmap[i], idx2 = pmap[i+1]; // ?
             const double* pj = jp + idx1 * POINT_ALIGN2;
             const double* e  = pe + idx1 * 2;
             double temp[3] = {0, 0, 0};
@@ -1277,7 +1285,7 @@ namespace ProgramCPU
                 temp[1] += (e[0] * pj[1] + e[1] * pj[POINT_ALIGN + 1]);
                 temp[2] += (e[0] * pj[2] + e[1] * pj[POINT_ALIGN + 2]);
             }
-            v[0] = temp[0]; v[1] = temp[1]; v[2] = temp[2];
+            v[POINT_ALIGN*i] = temp[0]; v[POINT_ALIGN*i+1] = temp[1]; v[POINT_ALIGN*i+2] = temp[2];
         }
     }
 
@@ -1358,42 +1366,43 @@ namespace ProgramCPU
 
         double* vc0 = jte, *vp0 = jte + ncam * 8;
 
-        for(size_t i = 0 ;i < nproj; ++i, jmap += 2, ms += 2, ee += 2)
+//#pragma omp parallel for
+        for(size_t i = 0 ;i < nproj; ++i)
         {
-            int cidx = jmap[0], pidx = jmap[1];
+            int cidx = jmap[2*i], pidx = jmap[2*i+1];
             const double* c = camera + cidx * 16, * pt = point + pidx * POINT_ALIGN;
 
             if(mode == 0)
             {
                 /////////////////////////////////////////////////////
-                JacobianOne(c, pt, ms, jc, jc + 8, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
+                JacobianOne(c, pt, ms + 2*i, jc, jc + 8, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
 
                 ////////////////////////////////////////////
                 double* vc = vc0 + cidx * 8, *vp = vp0 + pidx * POINT_ALIGN;
-                AddScaledVec8(ee[0], jc,     vc);
-                AddScaledVec8(ee[1], jc + 8, vc);
-                vp[0] += (ee[0] * pj[0] + ee[1] * pj[POINT_ALIGN]);
-                vp[1] += (ee[0] * pj[1] + ee[1] * pj[POINT_ALIGN + 1]);
-                vp[2] += (ee[0] * pj[2] + ee[1] * pj[POINT_ALIGN + 2]);
+                AddScaledVec8(ee[2*i], jc,     vc);
+                AddScaledVec8(ee[2*i+1], jc + 8, vc);
+                vp[0] += (ee[2*i] * pj[0] + ee[2*i+1] * pj[POINT_ALIGN]);
+                vp[1] += (ee[2*i] * pj[1] + ee[2*i+1] * pj[POINT_ALIGN + 1]);
+                vp[2] += (ee[2*i] * pj[2] + ee[2*i+1] * pj[POINT_ALIGN + 2]);
             }else if(mode == 1)
             {
                 /////////////////////////////////////////////////////
-                JacobianOne(c, pt, ms, jc, jc + 8, (double*) NULL, (double*) NULL, intrinsic_fixed, radial_distortion);
+                JacobianOne(c, pt, ms + 2*i, jc, jc + 8, (double*) NULL, (double*) NULL, intrinsic_fixed, radial_distortion);
 
                 ////////////////////////////////////////////
                 double* vc = vc0 + cidx * 8;
-                AddScaledVec8(ee[0], jc,     vc);
-                AddScaledVec8(ee[1], jc + 8, vc);
+                AddScaledVec8(ee[2*i], jc,     vc);
+                AddScaledVec8(ee[2*i+1], jc + 8, vc);
             }else
             {
                /////////////////////////////////////////////////////
-                JacobianOne(c, pt, ms, (double*) NULL, (double*) NULL, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
+                JacobianOne(c, pt, ms + 2*i, (double*) NULL, (double*) NULL, pj, pj + POINT_ALIGN, intrinsic_fixed, radial_distortion);
 
                 ////////////////////////////////////////////
                 double *vp = vp0 + pidx * POINT_ALIGN;
-                vp[0] += (ee[0] * pj[0] + ee[1] * pj[POINT_ALIGN]);
-                vp[1] += (ee[0] * pj[1] + ee[1] * pj[POINT_ALIGN + 1]);
-                vp[2] += (ee[0] * pj[2] + ee[1] * pj[POINT_ALIGN + 2]);
+                vp[0] += (ee[2*i] * pj[0] + ee[2*i+1] * pj[POINT_ALIGN]);
+                vp[1] += (ee[2*i] * pj[1] + ee[2*i+1] * pj[POINT_ALIGN + 1]);
+                vp[2] += (ee[2*i] * pj[2] + ee[2*i+1] * pj[POINT_ALIGN + 2]);
             }
         }
     }
