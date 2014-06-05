@@ -109,7 +109,7 @@ namespace ProgramCPU
         double sum = 0.0;
         std::size_t len = vec.size();
         // auto-vectorized
-#pragma omp parallel for reduction(+:sum)
+#pragma omp parallel for reduction(+:sum) if(vec.size() > 100000)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * v[i];
         return sum;
@@ -397,7 +397,7 @@ namespace ProgramCPU
     void ComputeProjectionX(size_t nproj, const double* camera, const double* point, const double* ms,
                            const int * jmap, double* pj, int radial, int mt)
     {
-//#pragma omp parallel for
+#pragma omp parallel for
         for(size_t i = 0; i < nproj; ++i)
         {
             const double* c = camera + jmap[2*i] * 16;
@@ -442,7 +442,7 @@ namespace ProgramCPU
     {
         if(sj)
         {
-//#pragma omp parallel for
+#pragma omp parallel for
             for(size_t i = 0;i < nq; ++i)
             {
                 int idx1 = qmap[2*i] * 8, idx2 = qmap[2*i+1] * 8;
@@ -455,7 +455,7 @@ namespace ProgramCPU
             }
         }else
         {
-//#pragma omp parallel for
+#pragma omp parallel for
             for(size_t i = 0;i < nq; ++i)
             {
                 const double* x1 = x + qmap[2*i] * 8;
@@ -791,21 +791,21 @@ namespace ProgramCPU
     {
         const size_t bc = vn * 8;
 
-        double bufv[64 + 8]; //size_t offset = ((size_t)bufv) & 0xf;
-        //Float* pbuf = bufv + ((16 - offset) / sizeof(Float));
-        double* pbuf = (double*)ALIGN_PTR(bufv);
-
-
         ///////compute jc part
-        for(size_t i = 0; i < ncam; ++i, ++cmap, bi += bc)
+#pragma omp parallel for
+        for(size_t i = 0; i < ncam; ++i)
         {
-            int idx1 = cmap[0], idx2 = cmap[1];
+            int idx1 = cmap[i], idx2 = cmap[i+1];
             //////////////////////////////////////
             if(idx1 == idx2)
             {
-                SetVectorZero(bi, bi + bc);
+                SetVectorZero(bi + i*bc, bi + (i+1)*bc);
             }else
             {
+                double bufv[64 + 8]; //size_t offset = ((size_t)bufv) & 0xf;
+                //Float* pbuf = bufv + ((16 - offset) / sizeof(Float));
+                double* pbuf = (double*)ALIGN_PTR(bufv);
+
                 SetVectorZero(pbuf, pbuf + 64);
 
                 for(int j = idx1; j < idx2; ++j)
@@ -838,8 +838,8 @@ namespace ProgramCPU
                 }
 
                 //invert the matrix?
-                if(vn==8)   InvertSymmetricMatrix<double, 8, 8>(pbuf, bi);
-                else        InvertSymmetricMatrix<double, 7, 8>(pbuf, bi);
+                if(vn==8)   InvertSymmetricMatrix<double, 8, 8>(pbuf, bi + i*bc);
+                else        InvertSymmetricMatrix<double, 7, 8>(pbuf, bi + i*bc);
             }
         }
     }
@@ -847,9 +847,10 @@ namespace ProgramCPU
     void ComputeDiagonalBlockP(size_t npt, float lambda1, float lambda2,
                         const double*  jp, const int* pmap, double* di, double* bi, int mt)
     {
-        for(size_t i = 0; i < npt; ++i, ++pmap, di += POINT_ALIGN, bi += 6)
+#pragma omp parallel for
+        for(size_t i = 0; i < npt; ++i)
         {
-            int idx1 = pmap[0], idx2 = pmap[1];
+            int idx1 = pmap[i], idx2 = pmap[i+1];
 
             double M00 = 0, M01= 0, M02 = 0, M11 = 0, M12 = 0, M22 = 0;
             const double* jxp = jp + idx1 * (POINT_ALIGN2), * jyp = jxp + POINT_ALIGN;
@@ -864,7 +865,7 @@ namespace ProgramCPU
             }
 
             /////////////////////////////////
-            di[0] = M00;    di[1] = M11;    di[2] = M22;
+            di[POINT_ALIGN*i] = M00;    di[POINT_ALIGN*i+1] = M11;    di[POINT_ALIGN*i+2] = M22;
 
             /////////////////////////////
             M00 = M00 * lambda2 + lambda1;
@@ -879,12 +880,12 @@ namespace ProgramCPU
                 for(int j = 0; j < 6; ++j) bi[j] = 0;
             }else
             {
-                bi[0] =  ( M11 * M22 - M12 * M12) / det;
-                bi[1] = -( M01 * M22 - M12 * M02) / det;
-                bi[2] =  ( M01 * M12 - M02 * M11) / det;
-                bi[3] =  ( M00 * M22 - M02 * M02) / det;
-                bi[4] = -( M00 * M12 - M01 * M02) / det;
-                bi[5] =  ( M00 * M11 - M01 * M01) / det;
+                bi[6*i] =  ( M11 * M22 - M12 * M12) / det;
+                bi[6*i+1] = -( M01 * M22 - M12 * M02) / det;
+                bi[6*i+2] =  ( M01 * M12 - M02 * M11) / det;
+                bi[6*i+3] =  ( M00 * M22 - M02 * M02) / det;
+                bi[6*i+4] = -( M00 * M12 - M01 * M02) / det;
+                bi[6*i+5] =  ( M00 * M11 - M01 * M01) / det;
             }
         }
     }
@@ -1141,29 +1142,33 @@ namespace ProgramCPU
         {
             const double* pxc = x, * pxp = pxc + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
-            for(size_t i = 0 ;i < nproj; ++i, jmap += 2, jc += 16, jp += POINT_ALIGN2, jx += 2)
+#pragma omp parallel for if(nproj > 100000)
+            for(size_t i = 0 ;i < nproj; ++i)
             {
-                ComputeTwoJX(jc, jp, pxc + jmap[0] * 8, pxp + jmap[1] * POINT_ALIGN, jx);
+                ComputeTwoJX(jc + 16*i, jp + POINT_ALIGN2*i, pxc + jmap[2*i] * 8, pxp + jmap[2*i+1] * POINT_ALIGN, jx + 2*i);
             }
         }else if(mode == 1)
         {
             const double* pxc = x;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
-            for(size_t i = 0 ;i < nproj; ++i, jmap += 2, jc += 16, jp += POINT_ALIGN2, jx += 2)
+#pragma omp parallel for if(nproj > 100000)
+            for(size_t i = 0 ;i < nproj; ++i)
             {
-                const double* xc = pxc + jmap[0] * 8;
-                jx[0] = DotProduct8(jc, xc)   ;
-                jx[1] = DotProduct8(jc + 8, xc);
+                const double* xc = pxc + jmap[2*i] * 8;
+                jx[2*i] = DotProduct8(jc + 16*i, xc)   ;
+                jx[2*i+1] = DotProduct8(jc + 16*i + 8, xc);
             }
         }else if(mode == 2)
         {
             const double* pxp = x + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
-            for(size_t i = 0 ;i < nproj; ++i, jmap += 2, jc += 16, jp += POINT_ALIGN2, jx += 2)
+#pragma omp parallel for if(nproj > 100000)
+            for(size_t i = 0 ;i < nproj; ++i)
             {
-                const double* xp = pxp + jmap[1] * POINT_ALIGN;
-                jx[0] =  (jp[0] * xp[0] + jp[1] * xp[1] + jp[2] * xp[2]);
-                jx[1] =  (jp[3] * xp[0] + jp[4] * xp[1] + jp[5] * xp[2]);
+                const double* xp = pxp + jmap[2*i+1] * POINT_ALIGN;
+                const double* jp_ = jp + POINT_ALIGN2*i;
+                jx[2*i] =    (jp_[0] * xp[0] + jp_[1] * xp[1] + jp_[2] * xp[2]);
+                jx[2*i+1] =  (jp_[3] * xp[0] + jp_[4] * xp[1] + jp_[5] * xp[2]);
             }
         }
     }
@@ -1275,7 +1280,7 @@ namespace ProgramCPU
     void ComputeJtEP(   size_t npt, const double* pe, const double* jp,
                         const int* pmap, double* v,  int mt)
     {
-//#pragma omp parallel for
+#pragma omp parallel for if(npt > 100000)
         for(size_t i = 0; i < npt; ++i)
         {
             int idx1 = pmap[i], idx2 = pmap[i+1]; // ?
