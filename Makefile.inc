@@ -2,7 +2,7 @@
 CXX ?= g++
 AR = gcc-ar
 SSE_FLAGS = -march=native
-CXXFLAGS ?= -Wall -Wextra -Wundef -pedantic -g -O3 -march=native -fno-math-errno -flto -pipe
+CXXFLAGS ?= -Wall -Wextra -Wundef -pedantic -g -O3 -march=native -fno-math-errno -funsafe-math-optimizations -flto -pipe -fopt-info-optimized-vec
 
 # Delete this if libgomp.a is not installed! (e.g., OS X without gcc)
 OPENMP ?= -fopenmp

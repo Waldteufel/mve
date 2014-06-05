@@ -58,6 +58,7 @@ namespace ProgramCPU
     {
         double* v = vec.begin();
         std::size_t len = vec.size();
+        // auto-vectorized
 //#pragma omp parallel for
         for (std::size_t i = 0; i < len; ++i)
             v[i] = std::sqrt(v[i]);
@@ -67,18 +68,14 @@ namespace ProgramCPU
     {
         double* v = vec.begin();
         std::size_t len = vec.size();
+        // auto-vectorized
 //#pragma omp parallel for
         for (std::size_t i = 0; i < len; ++i)
             v[i] = v[i] == 0.0 ? 0.0 : 1/std::sqrt(v[i]);
     }
 
-    inline void SetVectorZero(double* p,double* pe)  { std::fill(p, pe, 0.0);                     }
-    inline void SetVectorZero(avec& vec)    { std::fill(vec.begin(), vec.end(), 0.0);    }
-
-    inline void MemoryCopyA(const double* p, const double* pe, double* d)
-    {
-        std::copy(p, pe, d);
-    }
+    inline void SetVectorZero(double* p,double* pe) { std::fill(p, pe, 0.0); }
+    inline void SetVectorZero(avec& vec) { std::fill(vec.begin(), vec.end(), 0.0); }
 
     double ComputeVectorNormW(const avec& vec, const avec& weight)
     {
@@ -109,7 +106,7 @@ namespace ProgramCPU
         double const* v = vec.begin();
         double sum = 0.0;
         std::size_t len = vec.size();
-//#pragma omp parallel for reduction(+:sum)
+#pragma omp parallel for reduction(+:sum)
         for (std::size_t i = 0; i < len; ++i)
             sum += v[i] * v[i];
         return sum;
@@ -121,6 +118,7 @@ namespace ProgramCPU
         const double*  ite = part ? (it1 + part) : vec1.end();
         double* it3 = result.begin() + skip;
         size_t n = ite - it1;
+        // auto-vectorized
 //#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              it3[i] = it1[i] * it2[i];
@@ -140,6 +138,7 @@ namespace ProgramCPU
     {
         const double*  it1 = vec1.begin();
         double* it3 = result.begin();
+        // auto-vectorized
 //#pragma omp parallel for
         for(std::size_t i = 0; i < vec1.size(); ++i)
              it3[i] = a * it1[i];
@@ -148,6 +147,7 @@ namespace ProgramCPU
     inline void   ComputeSXYPZ(double a, const double* p1, const double* p2, const double* p3, double* p4, double* pe)
     {
         std::size_t n = pe - p4;
+        // auto-vectorized
 //#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              p4[i] = a * p1[i] * p2[i] + p3[i];
@@ -156,6 +156,7 @@ namespace ProgramCPU
     void   ComputeSAXPY(double a, const double* it1, const double* it2, double* it3, double* ite)
     {
         std::size_t n = ite - it3;
+        // auto-vectorized
 //#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              it3[i] = a * it1[i] + it2[i];
@@ -163,16 +164,12 @@ namespace ProgramCPU
 
     void AddBlockJtJ(const double * jc, double * block, int vn)
     {
+        // auto-vectorized
         for(int i = 0; i < vn; ++i)
         {
             double* row = block + i * 8,  a = jc[i];
             for(int j = 0; j < vn; ++j) row[j] += a * jc[j];
         }
-    }
-
-    inline void MemoryCopyB(const double* p, const double* pe, double* d)
-    {
-        std::copy(p, pe, d);
     }
 
     inline double   DotProduct8(const double* v1, const double* v2)
@@ -654,7 +651,7 @@ namespace ProgramCPU
                 }
             }
 
-            if(jct && jc)    MemoryCopyB(jci, jci + 16, jct + cmlist[0] * 16);
+            if(jct && jc)    std::copy(jci, jci + 16, jct + cmlist[0] * 16);
         }
     }
 
@@ -664,19 +661,21 @@ namespace ProgramCPU
         {
             for(size_t i = 0; i < ncam; ++i, qw += 2, d += 8, sj += 8)
             {
-                if(qw[0] == 0) continue;
-                double j1 = qw[0] * sj[0];
-                double j2 = qw[1] * sj[7];
-                d[0] += (j1 * j1 * 2.0f);
-                d[7] += (j2 * j2 * 2.0f);
+                if(qw[0] != 0) {
+                    double j1 = qw[0] * sj[0];
+                    double j2 = qw[1] * sj[7];
+                    d[0] += (j1 * j1 * 2.0f);
+                    d[7] += (j2 * j2 * 2.0f);
+                }
             }
         }else
         {
             for(size_t i = 0; i < ncam; ++i, qw += 2, d += 8)
             {
-                if(qw[0] == 0) continue;
-                d[0] += (qw[0] * qw[0] * 2.0f);
-                d[7] += (qw[1] * qw[1] * 2.0f);
+                if(qw[0] != 0) {
+                    d[0] += (qw[0] * qw[0] * 2.0f);
+                    d[7] += (qw[1] * qw[1] * 2.0f);
+                }
             }
         }
     }
@@ -711,6 +710,7 @@ namespace ProgramCPU
                 int idx = jc_transpose? j : cmlist[j];
                 const double* pj = jc + idx * 16;
                 ///////////////////////////////////////////
+                // auto-vectorized
                 for(int k = 0; k < vn; ++k) jji[k] += (pj[k] * pj[k] + pj[k + 8] * pj[k + 8]);
             }
             if(qw0 && qw[0] > 0)
@@ -1100,6 +1100,7 @@ namespace ProgramCPU
 
     void MultiplyBlockConditionerC(int ncam, const double* bi, const double*  x, double* vx, int vn, int mt = 0)
     {
+        // auto-vectorized
         for(int i = 0; i < ncam; ++i, x += 8, vx += 8)
         {
             double *vxc = vx;
