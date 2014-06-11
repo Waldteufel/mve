@@ -151,7 +151,7 @@ namespace ProgramCPU
     {
         std::size_t n = pe - p4;
         // auto-vectorized
-//#pragma omp parallel for
+#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              p4[i] = a * p1[i] * p2[i] + p3[i];
     }
@@ -160,7 +160,7 @@ namespace ProgramCPU
     {
         std::size_t n = ite - it3;
         // auto-vectorized
-//#pragma omp parallel for
+#pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
              it3[i] = a * it1[i] + it2[i];
     }
@@ -1142,7 +1142,7 @@ namespace ProgramCPU
         {
             const double* pxc = x, * pxp = pxc + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
-#pragma omp parallel for if(nproj > 100000)
+#pragma omp parallel for
             for(size_t i = 0 ;i < nproj; ++i)
             {
                 ComputeTwoJX(jc + 16*i, jp + POINT_ALIGN2*i, pxc + jmap[2*i] * 8, pxp + jmap[2*i+1] * POINT_ALIGN, jx + 2*i);
@@ -1151,7 +1151,7 @@ namespace ProgramCPU
         {
             const double* pxc = x;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
-#pragma omp parallel for if(nproj > 100000)
+#pragma omp parallel for
             for(size_t i = 0 ;i < nproj; ++i)
             {
                 const double* xc = pxc + jmap[2*i] * 8;
@@ -1162,7 +1162,7 @@ namespace ProgramCPU
         {
             const double* pxp = x + ncam * 8;
             //clock_t tp = clock(); double s1 = 0, s2  = 0;
-#pragma omp parallel for if(nproj > 100000)
+#pragma omp parallel for
             for(size_t i = 0 ;i < nproj; ++i)
             {
                 const double* xp = pxp + jmap[2*i+1] * POINT_ALIGN;
@@ -1280,7 +1280,7 @@ namespace ProgramCPU
     void ComputeJtEP(   size_t npt, const double* pe, const double* jp,
                         const int* pmap, double* v,  int mt)
     {
-#pragma omp parallel for if(npt > 100000)
+#pragma omp parallel for
         for(size_t i = 0; i < npt; ++i)
         {
             int idx1 = pmap[i], idx2 = pmap[i+1]; // ?
@@ -1967,6 +1967,7 @@ void SparseBundleCPU::ComputeJX(VectorF& X, VectorF& JX, int mode)
     ConfigBA::TimerBA timer (this, TIMER_FUNCTION_JX);
     if(__no_jacobian_store || (__multiply_jx_usenoj && mode != 2) || !__jc_store_original)
     {
+        exit(110);
         ProgramCPU::ComputeJX_(_num_imgpt, _num_camera, X.begin(), JX.begin(), _cuCameraData.begin(), _cuPointData.begin(),
                           _cuMeasurements.begin(), _cuVectorSJ.begin(), &_cuProjectionMap.front(),
                           __fixed_intrinsics, __use_radial_distortion, mode, __num_cpu_thread[FUNC_JX_]);
