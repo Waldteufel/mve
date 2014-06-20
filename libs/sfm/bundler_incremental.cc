@@ -509,8 +509,8 @@ Incremental::bundle_adjustment_intern (int single_camera_ba)
         pba.SetNextBundleMode(pba::BUNDLE_FULL);
     pba.SetNextTimeBudget(0);
 
-    pba.GetInternalConfig()->__verbose_cg_iteration = false;
-    pba.GetInternalConfig()->__verbose_level = -1;
+    pba.GetInternalConfig()->__verbose_cg_iteration = true;
+    pba.GetInternalConfig()->__verbose_level = 2;
     pba.GetInternalConfig()->__verbose_function_time = false;
     pba.GetInternalConfig()->__verbose_allocation = false;
     pba.GetInternalConfig()->__verbose_sse = false;
