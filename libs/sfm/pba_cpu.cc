@@ -111,6 +111,7 @@ namespace ProgramCPU
         // auto-vectorized
 #pragma omp parallel for reduction(+:sum) if(vec.size() > 100000)
         for (std::size_t i = 0; i < len; ++i)
+            // hot! (2G)
             sum += v[i] * v[i];
         return sum;
     }
@@ -162,7 +163,8 @@ namespace ProgramCPU
         // auto-vectorized
 #pragma omp parallel for
         for(std::size_t i = 0; i < n; ++i)
-             it3[i] = a * it1[i] + it2[i];
+            // hot! (2G)
+            it3[i] = a * it1[i] + it2[i];
     }
 
     void AddBlockJtJ(const double * jc, double * block, int vn)
@@ -177,6 +179,7 @@ namespace ProgramCPU
 
     inline double   DotProduct8(const double* v1, const double* v2)
     {
+        // hot! (3G)
         return  v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2] + v1[3] * v2[3] +
                 v1[4] * v2[4] + v1[5] * v2[5] + v1[6] * v2[6] + v1[7] * v2[7];
     }

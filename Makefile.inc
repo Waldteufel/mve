@@ -2,7 +2,7 @@
 CXX ?= g++
 AR = gcc-ar
 SSE_FLAGS = -march=native
-CXXFLAGS ?= -Wall -Wextra -Wundef -pedantic -g -Og -fno-math-errno -funsafe-math-optimizations -march=native -flto -pipe
+CXXFLAGS ?= -Wall -Wextra -Wundef -pedantic -g -Og -fno-math-errno -funsafe-math-optimizations -march=native -flto -pipe -fprofile-arcs -ftest-coverage
 
 # Delete this if libgomp.a is not installed! (e.g., OS X without gcc)
 OPENMP ?= -fopenmp
@@ -20,7 +20,7 @@ endif
 LDFLAGS += ${CXXFLAGS}
 
 COMPILE.cc = ${CXX} ${CXXFLAGS} ${CPPFLAGS} -c
-LINK.o = ${CXX} ${LDFLAGS}
+LINK.o = ${CXX} ${LDFLAGS} -lgcov
 .DEFAULT_GOAL := ${TARGET}
 
 # How to link example from example.o and other files.
