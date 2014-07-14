@@ -129,7 +129,7 @@ public:
     bool    __cg_schur_complement;
 
     //////////////////////////////
-    bool    __lm_check_gradient;         //(default false) check g_inf for convergence
+    bool    __lm_check_gradient;         //!(default false) check g_inf for convergence
     float   __lm_damping_auto_switch;
     bool    __lm_use_diagonal_damp;      //(default true)use (Jt*J + lambda * diag(Jt*J)) = Jt * e
                                          //            or  use (Jt*J + lambda * I) = Jt * e
@@ -142,7 +142,7 @@ public:
     bool    __abort_flag;                //(default false)abort the bundle adjustment loop if set true
     bool    __verbose_cg_iteration;      //(default false)print out details of Conjugate Gradients
     bool    __verbose_function_time;     //(default false)print timing of some key functions
-    bool    __save_gradient_norm;        //(default false)save |Jt * e|_2 of each iteration
+    bool    __save_gradient_norm;        //!(default false)save |Jt * e|_2 of each iteration
     bool    __verbose_allocation;        //(default false)whether print out allocation details
     bool    __verbose_sse;               //(default false) show mse or sse
 

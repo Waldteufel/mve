@@ -171,7 +171,7 @@ protected:      //cuda data
 
     //////////////////////////////////
 protected:
-    int          _num_imgpt_q;
+    int          _num_imgpt_q; //!?
     float		 _weight_q;
     VectorI		 _cuCameraQList;
     VectorI		 _cuCameraQMap;

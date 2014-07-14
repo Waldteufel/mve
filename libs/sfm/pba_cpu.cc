@@ -221,98 +221,6 @@ namespace ProgramCPU
         ComputeSAXPY(a, vec1.begin(), vec2.begin(), result.begin(), result.end());
     }
 
-    void GetRodriguesRotation(const double m[3][3], double r[3])
-    {
-        //http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToAngle/index.htm
-        double a = (m[0][0]+m[1][1]+m[2][2]-1.0)/2.0;
-        const double epsilon = 0.01;
-        if( fabs(m[0][1] - m[1][0]) < epsilon &&
-            fabs(m[1][2] - m[2][1]) < epsilon &&
-            fabs(m[0][2] - m[2][0]) < epsilon )
-        {
-            if( fabs(m[0][1] + m[1][0]) < 0.1 &&
-                fabs(m[1][2] + m[2][1]) < 0.1 &&
-                fabs(m[0][2] + m[2][0]) < 0.1 && a > 0.9)
-            {
-                r[0]    =    0;
-                r[1]    =    0;
-                r[2]    =    0;
-            }
-            else
-            {
-                const double ha = double(sqrt(0.5) * PBA_PI);
-                double xx = (m[0][0]+1.0)/2.0;
-                double yy = (m[1][1]+1.0)/2.0;
-                double zz = (m[2][2]+1.0)/2.0;
-                double xy = (m[0][1]+m[1][0])/4.0;
-                double xz = (m[0][2]+m[2][0])/4.0;
-                double yz = (m[1][2]+m[2][1])/4.0;
-
-                if ((xx > yy) && (xx > zz))
-                {
-                    if (xx< epsilon)
-                    {
-                        r[0] = 0;    r[1] = r[2] = ha;
-                    } else
-                    {
-                        double t = sqrt(xx) ;
-                        r[0] = double(t * PBA_PI);
-                        r[1] = double(xy/t * PBA_PI);
-                        r[2] = double(xz/t * PBA_PI);
-                    }
-                } else if (yy > zz)
-                {
-                    if (yy< epsilon)
-                    {
-                        r[0] = r[2]  = ha; r[1] = 0;
-                    } else
-                    {
-                        double t = sqrt(yy);
-                        r[0] = double(xy/t* PBA_PI);
-                        r[1] = double( t * PBA_PI);
-                        r[2] = double(yz/t* PBA_PI);
-                    }
-                } else
-                {
-                    if (zz< epsilon)
-                    {
-                        r[0] = r[1] = ha; r[2] = 0;
-                    } else
-                    {
-                        double t  = sqrt(zz);
-                        r[0]  = double(xz/ t* PBA_PI);
-                        r[1]  = double(yz/ t* PBA_PI);
-                        r[2]  = double( t * PBA_PI);
-                    }
-                }
-            }
-        }
-        else
-        {
-            a = acos(a);
-            double b = 0.5*a/sin(a);
-            r[0]    =    double(b*(m[2][1]-m[1][2]));
-            r[1]    =    double(b*(m[0][2]-m[2][0]));
-            r[2]    =    double(b*(m[1][0]-m[0][1]));
-        }
-    }
-
-    void UncompressRodriguesRotation(const double r[3], double m[])
-    {
-        double a = sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]);
-        double ct = a==0.0?0.5f:(1.0f-cos(a))/a/a;
-        double st = a==0.0?1:sin(a)/a;
-        m[0]=double(1.0 - (r[1]*r[1] + r[2]*r[2])*ct);
-        m[1]=double(r[0]*r[1]*ct - r[2]*st);
-        m[2]=double(r[2]*r[0]*ct + r[1]*st);
-        m[3]=double(r[0]*r[1]*ct + r[2]*st);
-        m[4]=double(1.0f - (r[2]*r[2] + r[0]*r[0])*ct);
-        m[5]=double(r[1]*r[2]*ct - r[0]*st);
-        m[6]=double(r[2]*r[0]*ct - r[1]*st);
-        m[7]=double(r[1]*r[2]*ct + r[0]*st);
-        m[8]=double(1.0 - (r[0]*r[0] + r[1]*r[1])*ct );
-    }
-
     void UpdateCamera(int ncam, const avec& camera, const avec& delta, avec& new_camera)
     {
         //f[1], t[3], r[3][3], d[1]
@@ -340,9 +248,6 @@ namespace ProgramCPU
             nc[11] = m[6] * c[4+1] + m[7] * c[4+4] + m[8] * c[4+7];
             nc[12] = m[6] * c[4+2] + m[7] * c[4+5] + m[8] * c[4+8];
 
-            //Float temp[3];
-            //GetRodriguesRotation((Float (*)[3])  (nc + 4), temp);
-            //UncompressRodriguesRotation(temp, nc + 4);
             nc[14] = c[14];
             nc[15] = c[15];
         }
